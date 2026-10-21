@@ -23,7 +23,11 @@ can't tell.
 | Right when it did give a conclusion | 13 of 17 (76%) | 14 of 27 (52%) |
 | True cause ranked first | 17 of 27 (63%) | 14 of 27 (52%) |
 | True cause in its top three | 21 of 27 (78%) | 15 of 27 (56%) |
+| Citations that point to data a tool really returned | 100% | 100% |
+| Key evidence for the true cause that it cited | 57% | 49% |
+| Tool calls per investigation | 15 | 6 |
 | AI calls per investigation | 48 | 13 |
+| Tokens per investigation | 125,154 | 52,786 |
 | Time per investigation (median) | 14 minutes | 4.5 minutes |
 
 Every table, for every incident, is in [results/test/summary.md](../results/test/summary.md).
