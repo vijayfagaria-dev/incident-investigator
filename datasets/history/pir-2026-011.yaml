@@ -1,0 +1,15 @@
+id: pir:2026-011
+date: 2026-02-07
+title: Withdrawals failing during bank-rails maintenance
+services: [payments-service, bank-rails]
+symptoms:
+  - POST /v1/withdrawals failing with 502
+  - bank-rails latency p99 above 4 seconds
+root_cause:
+  service: bank-rails
+  category: dependency_degradation
+summary: >
+  The banking partner ran unannounced maintenance. Withdrawals failed; deposits and
+  checkout were unaffected because they use a different rail.
+resolution: >
+  Queued withdrawals for retry and subscribed to the partner's maintenance calendar.

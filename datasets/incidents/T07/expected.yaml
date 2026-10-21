@@ -1,0 +1,18 @@
+split: test
+tags: [misleading]
+expected_outcome: conclusive
+root_cause:
+  service: notification-service
+  category: capacity_saturation
+  trigger: null
+key_evidence:
+  metrics:
+    - metric:notification-service/consumer_lag
+    - metric:kafka/messages_in_per_s
+  log_patterns:
+    - {service: notification-service, contains: "messages behind"}
+red_herrings: [chg:2571]
+notes: >
+  The deploy went out at 13:12 and notification-service kept up for the next 18 minutes.
+  At market open kafka input quadruples, notification-service CPU saturates and lag climbs.
+  The deprecation warnings are noise. The fix is more consumers, not a rollback.

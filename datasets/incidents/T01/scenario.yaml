@@ -1,0 +1,54 @@
+# orders-service v2.15.0 adds an endpoint for amending open orders. Its validation assumes
+# every order has a limit price, so amending a market order throws. Only that route fails.
+
+seed: 5101
+window: {start: 2026-10-05T12:00:00Z, end: 2026-10-05T15:00:00Z}
+
+changes:
+  - id: chg:2493
+    ts: 2026-10-05T12:18:40Z
+    service: market-data-service
+    kind: deploy
+    actor: ci/deploy-bot
+    summary: "market-data-service v4.12.1: retry vendor 429s with jitter"
+    details: {version: "4.12.1", previous_version: "4.12.0", commit: a71d3e0, diff: "+38 / -12"}
+  - id: chg:2497
+    ts: 2026-10-05T12:55:02Z
+    service: auth-service
+    kind: config
+    actor: priya.nair
+    summary: Raise session idle timeout for web clients
+    details: {session.idle_timeout: "15m -> 30m"}
+  - id: chg:2501
+    ts: 2026-10-05T13:31:20Z
+    service: orders-service
+    kind: deploy
+    actor: ci/deploy-bot
+    summary: "orders-service v2.15.0: add order amendment endpoint"
+    details: {version: "2.15.0", previous_version: "2.14.3", commit: e4a91c2, diff: "+296 / -41"}
+
+effects:
+  - kind: log
+    service: orders-service
+    level: INFO
+    template: "application started: orders-service 2.15.0 (commit e4a91c2)"
+    start: 2026-10-05T13:31:30Z
+    end: 2026-10-05T13:33:00Z
+    count: 4
+  - {kind: metric, service: orders-service, metric: error_rate, start: 2026-10-05T13:33:00Z, to: 0.05, noise: 0.15}
+  - kind: log
+    service: orders-service
+    level: ERROR
+    template: "NullPointerException: Cannot invoke \"BigDecimal.compareTo(Object)\" because \"order.limitPrice\" is null (at AmendOrderHandler.validate, PATCH /v1/orders/{order})"
+    start: 2026-10-05T13:33:00Z
+    rate_per_min: 16
+    fields: {order: {uniform: [5000000, 5999999]}}
+
+  # The gateway passes the 500s through on the orders routes.
+  - {kind: metric, service: edge-gateway, metric: error_rate, start: 2026-10-05T13:34:00Z, to: 0.009, noise: 0.2}
+  - kind: log
+    service: edge-gateway
+    level: WARN
+    template: "upstream orders-service returned 500 (route /v1/orders)"
+    start: 2026-10-05T13:34:00Z
+    rate_per_min: 15

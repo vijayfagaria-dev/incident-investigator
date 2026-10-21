@@ -1,0 +1,18 @@
+split: test
+tags: [conflicting]
+expected_outcome: conclusive
+root_cause:
+  service: redis-cache
+  category: infrastructure_failure
+  trigger: null
+key_evidence:
+  metrics: [metric:redis-cache/hit_ratio]
+  log_patterns:
+    - {service: redis-cache, contains: "+switch-master"}
+red_herrings: [chg:2519]
+notes: >
+  postgres-orders is saturated, but it is the victim: its load jumps the minute redis-cache
+  fails over to a replica with an empty keyspace and the cache hit ratio collapses. Cache
+  misses from portfolio-service and lost sessions in auth-service point at redis. The
+  work_mem change was applied 40 minutes earlier with no effect. The first metrics query is
+  rate-limited twice before it succeeds.

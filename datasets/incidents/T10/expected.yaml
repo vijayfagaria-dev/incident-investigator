@@ -1,0 +1,14 @@
+split: test
+tags: [inconclusive, tool-failure]
+expected_outcome: inconclusive
+root_cause: null
+key_evidence:
+  log_patterns:
+    - {service: edge-gateway, contains: "upstream payments-service returned 502"}
+red_herrings: [pir:2026-011]
+notes: >
+  The real cause is a withdrawal signing-key change in payments-service (chg:2602), but the
+  change feed is down, metrics never answer, and logs survive only from 17:48 and not from
+  az-a. What remains shows withdrawals failing at bank-rails without saying why. The past
+  bank-rails outage is an analogy, not evidence. The correct outcome is inconclusive, with
+  the missing evidence named.

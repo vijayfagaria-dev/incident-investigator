@@ -1,0 +1,102 @@
+# The redis-cache primary stops answering and Sentinel promotes a replica that had not
+# finished resyncing, so the cache comes back empty. Every cache miss falls through to
+# postgres-orders, which saturates. Sessions stored in redis are lost too.
+
+seed: 5103
+window: {start: 2026-10-07T09:00:00Z, end: 2026-10-07T12:00:00Z}
+
+changes:
+  - id: chg:2519
+    ts: 2026-10-07T09:31:44Z
+    service: postgres-orders
+    kind: config
+    actor: marta.silva
+    summary: Raise work_mem for reporting queries
+    details: {work_mem: "4MB -> 8MB", applied: reload}
+  - id: chg:2522
+    ts: 2026-10-07T09:58:10Z
+    service: payments-service
+    kind: deploy
+    actor: ci/deploy-bot
+    summary: "payments-service v7.3.1: update bank-rails client"
+    details: {version: "7.3.1", previous_version: "7.3.0", commit: 52e9b14, diff: "+64 / -30"}
+
+effects:
+  - kind: log
+    service: redis-cache
+    level: ERROR
+    template: "sentinel: +sdown master cache redis-cache-0 (no reply to PING for 5000ms)"
+    start: 2026-10-07T10:12:00Z
+    end: 2026-10-07T10:12:20Z
+    count: 2
+  - kind: log
+    service: redis-cache
+    level: WARN
+    template: "sentinel: +switch-master cache redis-cache-0 -> redis-cache-1"
+    start: 2026-10-07T10:12:20Z
+    end: 2026-10-07T10:12:40Z
+    count: 1
+  - kind: log
+    service: redis-cache
+    level: WARN
+    template: "promoted replica had not finished full resync; serving from empty keyspace"
+    start: 2026-10-07T10:12:30Z
+    end: 2026-10-07T10:12:50Z
+    count: 1
+  - {kind: metric, service: redis-cache, metric: hit_ratio, start: 2026-10-07T10:13:00Z, end: 2026-10-07T10:28:00Z, to: 0.2}
+  - {kind: metric, service: redis-cache, metric: hit_ratio, start: 2026-10-07T10:28:00Z, to: 0.45}
+
+  # Cache misses fall through to the orders database.
+  - {kind: metric, service: postgres-orders, metric: cpu_util, start: 2026-10-07T10:13:00Z, shape: ramp, ramp_minutes: 3, to: 0.97, noise: 0.02}
+  - {kind: metric, service: postgres-orders, metric: active_connections, start: 2026-10-07T10:13:00Z, shape: ramp, ramp_minutes: 3, to: 190}
+  - {kind: metric, service: postgres-orders, metric: query_latency_p99_ms, start: 2026-10-07T10:14:00Z, shape: ramp, ramp_minutes: 3, to: 900}
+  - kind: log
+    service: postgres-orders
+    level: WARN
+    template: "duration: {ms} ms  statement: SELECT * FROM positions WHERE account_id = $1"
+    start: 2026-10-07T10:14:00Z
+    rate_per_min: 40
+    fields: {ms: {uniform: [800, 2400]}}
+  - kind: log
+    service: postgres-orders
+    level: ERROR
+    template: "FATAL: remaining connection slots are reserved for non-replication superuser connections"
+    start: 2026-10-07T10:16:00Z
+    rate_per_min: 12
+  - kind: log
+    service: portfolio-service
+    level: WARN
+    template: "cache miss for positions:{account}; loading from postgres-orders"
+    start: 2026-10-07T10:13:00Z
+    rate_per_min: 60
+    fields: {account: {uniform: [100000, 999999]}}
+  - {kind: metric, service: portfolio-service, metric: latency_p99_ms, start: 2026-10-07T10:14:00Z, shape: ramp, ramp_minutes: 3, to: 2900}
+  - {kind: metric, service: portfolio-service, metric: error_rate, start: 2026-10-07T10:15:00Z, shape: ramp, ramp_minutes: 3, to: 0.05, noise: 0.15}
+  - kind: log
+    service: portfolio-service
+    level: ERROR
+    template: "query on postgres-orders timed out after 2000ms"
+    start: 2026-10-07T10:16:00Z
+    rate_per_min: 20
+  - {kind: metric, service: orders-service, metric: latency_p99_ms, start: 2026-10-07T10:15:00Z, shape: ramp, ramp_minutes: 3, to: 1800}
+  - {kind: metric, service: orders-service, metric: error_rate, start: 2026-10-07T10:16:00Z, to: 0.02, noise: 0.2}
+
+  # Sessions lived in the old primary.
+  - kind: log
+    service: auth-service
+    level: WARN
+    template: "session {session} not found in redis; forcing re-login"
+    start: 2026-10-07T10:12:30Z
+    end: 2026-10-07T10:45:00Z
+    rate_per_min: 25
+    fields: {session: {uniform: [10000000, 99999999]}}
+  - {kind: metric, service: edge-gateway, metric: error_rate, start: 2026-10-07T10:16:00Z, shape: ramp, ramp_minutes: 3, to: 0.025, noise: 0.15}
+  - kind: log
+    service: edge-gateway
+    level: WARN
+    template: "upstream portfolio-service timed out after 3000ms (route /v1/portfolio)"
+    start: 2026-10-07T10:16:00Z
+    rate_per_min: 10
+
+faults:
+  - {tool: query_metrics, kind: rate_limited, invocations: [1, 2]}

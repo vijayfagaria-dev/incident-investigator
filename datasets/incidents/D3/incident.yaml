@@ -1,0 +1,15 @@
+id: D3
+title: Portfolio positions failing to load
+severity: sev2
+reported_at: 2026-10-16T14:42:00Z
+reported_by: on-call (trading)
+summary: >
+  Customers report that the positions tab of the portfolio page shows "something went
+  wrong". The rest of the portfolio page loads. Our metrics dashboards are timing out,
+  which is slowing triage.
+symptoms:
+  - GET /v1/portfolio/positions failing for many accounts
+  - Gateway 5xx rising on portfolio routes
+reported_services: [portfolio-service, edge-gateway]
+responder_notes:
+  - "market-data-service changed its quote batching shortly before this. Positions need quotes."

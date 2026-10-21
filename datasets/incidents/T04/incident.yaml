@@ -1,0 +1,15 @@
+id: T04
+title: Some order placements failing
+severity: sev2
+reported_at: 2026-10-08T15:50:00Z
+reported_by: on-call (trading)
+summary: >
+  Since about 15:25 UTC a share of customers cannot place orders; they get a generic error.
+  Retrying does not help those customers, but most people are unaffected.
+symptoms:
+  - POST /v1/orders failing for some customers, consistently
+  - orders-service 5xx up
+reported_services: [orders-service]
+responder_notes:
+  - "There were no deploys today, I checked the deploy dashboard."
+  - "Could market-data be sending bad prices?"

@@ -1,0 +1,21 @@
+split: test
+tags: [conflicting]
+expected_outcome: conclusive
+root_cause:
+  service: payments-service
+  category: certificate_or_credential
+  trigger: chg:2581
+acceptable_alternates:
+  - {service: postgres-payments, category: certificate_or_credential, trigger: chg:2581}
+key_evidence:
+  changes: [chg:2581]
+  metrics: [metric:payments-service/error_rate]
+  log_patterns:
+    - {service: payments-service, contains: "password authentication failed"}
+red_herrings: [chg:2578, pir:2026-011]
+notes: >
+  Green health checks and a February bank-rails outage point the responder the wrong way.
+  The password rotation at 02:00:05 is followed two minutes later by authentication
+  failures in both payments-service and postgres-payments, and the error rate grows as the
+  pool recycles connections. The bank-rails timeout change does not touch the database.
+  Two metrics queries are rate-limited on the way.

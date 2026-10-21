@@ -1,0 +1,11 @@
+id: D4
+title: Intermittent login failures
+severity: sev3
+reported_at: 2026-10-18T08:20:00Z
+reported_by: support desk
+summary: >
+  Support received a cluster of complaints that logging in failed on the first attempt and
+  worked on retry, starting some time this morning. It may have stopped already.
+symptoms:
+  - Some POST /v1/session requests failing, usually succeeding on retry
+reported_services: [auth-service]

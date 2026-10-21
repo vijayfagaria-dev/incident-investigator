@@ -1,0 +1,16 @@
+id: pir:2025-019
+date: 2025-05-02
+title: Order history timeouts after ORM upgrade
+services: [orders-service, postgres-orders]
+symptoms:
+  - GET /v1/orders p99 latency above 5 seconds
+  - postgres-orders CPU above 90%
+root_cause:
+  service: orders-service
+  category: code_regression
+summary: >
+  An ORM upgrade changed the default for order line items from eager to lazy loading,
+  turning each order history request into one query per line item.
+resolution: >
+  Rolled back the deploy, then reintroduced the upgrade with explicit eager loading and a
+  per-request query budget that logs a warning when exceeded.

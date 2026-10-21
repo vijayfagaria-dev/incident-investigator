@@ -1,0 +1,18 @@
+split: test
+tags: [conflicting]
+expected_outcome: conclusive
+root_cause:
+  service: edge-gateway
+  category: infrastructure_failure
+  trigger: null
+key_evidence:
+  metrics: [metric:edge-gateway/error_rate]
+  log_patterns:
+    - {service: edge-gateway, contains: "upstream connect error"}
+red_herrings: [chg:2561]
+notes: >
+  Every connection error comes from pods in az-b, across all upstreams and from three
+  different services, which points at the zone's network rather than any one service. The
+  aggregate error rate rises only to about 2% because two zones are healthy. The orders
+  deploy cannot explain failures on portfolio, payments and auth routes, and its warnings
+  are cache warm-up.

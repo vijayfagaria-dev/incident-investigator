@@ -1,0 +1,13 @@
+id: T10
+title: Withdrawals failing
+severity: sev2
+reported_at: 2026-10-15T18:00:00Z
+reported_by: support desk
+summary: >
+  Several customers say withdrawals have failed this afternoon. Deposits seem fine. Not sure
+  when it started.
+symptoms:
+  - POST /v1/withdrawals failing for some customers
+reported_services: [payments-service]
+responder_notes:
+  - "bank-rails had unannounced maintenance in February that looked like this."

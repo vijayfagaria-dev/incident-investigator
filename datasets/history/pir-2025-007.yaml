@@ -1,0 +1,17 @@
+id: pir:2025-007
+date: 2025-03-31
+title: Checkout errors during month-end deposit surge
+services: [payments-service, postgres-payments, edge-gateway]
+symptoms:
+  - POST /v1/checkout 5xx peaked at 11%
+  - payments-service logging HikariPool-1 "Connection is not available" errors
+  - payments-service p99 latency above 3 seconds
+root_cause:
+  service: payments-service
+  category: capacity_saturation
+summary: >
+  Month-end deposits drove payments traffic to 3.1x normal. The 50-connection pool
+  saturated and requests queued for a connection until they timed out.
+resolution: >
+  Raised db.pool.max_size to 80 for the day and added autoscaling on request queue depth.
+  Follow-up: load-test payments at 4x before each month end.

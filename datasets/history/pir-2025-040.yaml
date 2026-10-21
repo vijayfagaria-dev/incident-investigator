@@ -1,0 +1,16 @@
+id: pir:2025-040
+date: 2025-08-21
+title: Expired TLS certificate on auth-service internal endpoint
+services: [auth-service, edge-gateway]
+symptoms:
+  - edge-gateway logging x509 "certificate has expired or is not yet valid"
+  - POST /v1/session failing for all users
+root_cause:
+  service: auth-service
+  category: certificate_or_credential
+summary: >
+  The internal certificate for auth-service was issued manually and missed by automated
+  renewal. It expired at 00:00 UTC.
+resolution: >
+  Moved the certificate to automated issuance and added an alert 14 days before any
+  certificate expires.

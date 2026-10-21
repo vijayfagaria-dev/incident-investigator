@@ -1,0 +1,50 @@
+# Vault rotates the payments database password at 02:00. payments-service pods keep the old
+# password, so every new database connection fails. Existing connections keep working until
+# the pool recycles them, which is why the failure rate grows and health checks (which reuse
+# a pooled connection) stay green.
+
+seed: 5108
+window: {start: 2026-10-13T01:00:00Z, end: 2026-10-13T04:00:00Z}
+
+changes:
+  - id: chg:2578
+    ts: 2026-10-13T01:38:20Z
+    service: payments-service
+    kind: config
+    actor: config-bot
+    summary: Raise bank-rails client timeout
+    details: {bank_rails.timeout_ms: "4000 -> 5000"}
+  - id: chg:2581
+    ts: 2026-10-13T02:00:05Z
+    service: postgres-payments
+    kind: secret_rotation
+    actor: vault-rotator
+    summary: Rotate database password for payments_app
+    details: {secret: db/postgres-payments/payments_app, version: "v31 -> v32"}
+
+effects:
+  - {kind: metric, service: payments-service, metric: error_rate, start: 2026-10-13T02:02:00Z, shape: ramp, ramp_minutes: 8, to: 0.35, noise: 0.1}
+  - {kind: metric, service: payments-service, metric: db_pool_in_use, start: 2026-10-13T02:02:00Z, shape: ramp, ramp_minutes: 8, to: 2, noise: 0}
+  - kind: log
+    service: payments-service
+    level: ERROR
+    template: "could not open connection to postgres-payments: FATAL: password authentication failed for user \"payments_app\""
+    start: 2026-10-13T02:02:00Z
+    rate_per_min: 25
+  - kind: log
+    service: postgres-payments
+    level: ERROR
+    template: "FATAL: password authentication failed for user \"payments_app\""
+    start: 2026-10-13T02:02:00Z
+    rate_per_min: 25
+  - {kind: metric, service: postgres-payments, metric: active_connections, start: 2026-10-13T02:02:00Z, shape: ramp, ramp_minutes: 8, factor: 0.25}
+  - {kind: metric, service: edge-gateway, metric: error_rate, start: 2026-10-13T02:03:00Z, shape: ramp, ramp_minutes: 8, to: 0.02, noise: 0.15}
+  - kind: log
+    service: edge-gateway
+    level: WARN
+    template: "upstream payments-service returned 500 (route /v1/checkout)"
+    start: 2026-10-13T02:03:00Z
+    rate_per_min: 6
+
+faults:
+  - {tool: query_metrics, kind: rate_limited, invocations: [2, 3]}

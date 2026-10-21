@@ -1,0 +1,16 @@
+id: T02
+title: Portfolio pages slow and failing
+severity: sev2
+reported_at: 2026-10-06T15:05:00Z
+reported_by: on-call (trading)
+summary: >
+  Portfolio and positions pages are slow or failing for many customers. Some order
+  placements are being rejected as well.
+symptoms:
+  - GET /v1/portfolio p99 latency above 2.5 seconds
+  - Portfolio requests failing with 5xx
+  - Some orders rejected
+reported_services: [portfolio-service, edge-gateway]
+responder_notes:
+  - "portfolio-service v5.4.0 went out right around when this started. Suggest we roll it back."
+  - "Postgres dashboards look normal."

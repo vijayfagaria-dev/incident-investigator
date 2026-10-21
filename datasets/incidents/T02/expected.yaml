@@ -1,0 +1,22 @@
+split: test
+tags: [misleading]
+expected_outcome: conclusive
+root_cause:
+  service: quotes-vendor
+  category: dependency_degradation
+  trigger: null
+acceptable_alternates:
+  - {service: market-data-service, category: dependency_degradation}
+key_evidence:
+  metrics:
+    - metric:market-data-service/vendor_latency_p99_ms
+    - metric:market-data-service/vendor_error_rate
+  log_patterns:
+    - {service: market-data-service, contains: "quotes-vendor request timed out"}
+red_herrings: [chg:2512]
+notes: >
+  Vendor latency and errors rise at 14:40, market-data times out from 14:41 and its callers
+  from 14:42. The portfolio deploy the responder wants to roll back happens at 14:48, eight
+  minutes after the onset, so it cannot be the cause; its new warnings are about sector
+  mapping and harmless. Naming market-data-service as where the vendor degradation surfaces
+  is accepted. The first logs query times out once.

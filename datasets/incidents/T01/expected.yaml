@@ -1,0 +1,16 @@
+split: test
+tags: [control]
+expected_outcome: conclusive
+root_cause:
+  service: orders-service
+  category: code_regression
+  trigger: chg:2501
+key_evidence:
+  changes: [chg:2501]
+  metrics: [metric:orders-service/error_rate]
+  log_patterns:
+    - {service: orders-service, contains: "AmendOrderHandler"}
+notes: >
+  The v2.15.0 deploy adds the amendment endpoint, and two minutes later orders-service starts
+  throwing a NullPointerException in AmendOrderHandler on that route. The earlier
+  market-data and auth changes leave no trace in the telemetry. A straightforward case.

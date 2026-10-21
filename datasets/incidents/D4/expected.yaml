@@ -1,0 +1,13 @@
+split: dev
+tags: [inconclusive, tool-failure]
+expected_outcome: inconclusive
+root_cause: null
+key_evidence:
+  log_patterns:
+    - {service: edge-gateway, contains: "upstream auth-service returned 503"}
+notes: >
+  The real trigger is the redis-cache network policy change (chg:2402), but the change feed
+  is down for the whole investigation, auth and redis metrics are unavailable, and logs
+  before 08:10 have expired. Only two minutes of gateway warnings and gateway metrics remain,
+  which show that auth-service failed but not why. The correct outcome is inconclusive, with
+  the missing evidence named as gaps.

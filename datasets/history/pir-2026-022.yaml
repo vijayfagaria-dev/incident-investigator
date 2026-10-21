@@ -1,0 +1,16 @@
+id: pir:2026-022
+date: 2026-04-23
+title: auth-service failing after database credential rotation
+services: [auth-service]
+symptoms:
+  - auth-service logging "password authentication failed for user auth_app"
+  - health checks passing while logins failed
+root_cause:
+  service: auth-service
+  category: certificate_or_credential
+summary: >
+  Scheduled credential rotation updated the secret, but auth-service pods cached the old
+  password and only reloaded it on restart. The health check did not touch the database.
+resolution: >
+  Rolled the pods, made the service reload credentials on authentication failure, and
+  added a database round-trip to the readiness check.

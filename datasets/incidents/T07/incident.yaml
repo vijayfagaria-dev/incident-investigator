@@ -1,0 +1,14 @@
+id: T07
+title: Trade confirmation emails delayed
+severity: sev3
+reported_at: 2026-10-12T14:05:00Z
+reported_by: support desk
+summary: >
+  Customers say trade confirmation emails arrive 20 minutes or more after their orders fill,
+  starting around market open. Orders themselves are fine.
+symptoms:
+  - Trade confirmation emails delayed by 20+ minutes
+  - No errors reported on order placement
+reported_services: [notification-service]
+responder_notes:
+  - "notification-service v3.9.0 was deployed at 13:12 and has been logging warnings nonstop since. Roll back?"

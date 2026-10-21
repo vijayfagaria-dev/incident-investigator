@@ -1,0 +1,47 @@
+# The TLS certificate on auth-service's internal listener expires at 06:00. The gateway
+# refuses the handshake, so almost no requests reach auth-service at all. A gateway keepalive
+# change eight minutes earlier is unrelated. Logs from az-b are missing.
+
+seed: 5105
+window: {start: 2026-10-09T05:00:00Z, end: 2026-10-09T08:00:00Z}
+
+changes:
+  - id: chg:2538
+    ts: 2026-10-09T05:10:00Z
+    service: kafka
+    kind: infra
+    actor: platform-automation
+    summary: Rolling restart of brokers for OS patch
+    details: {hosts: "kafka-0..kafka-2", patch: "2026-10"}
+  - id: chg:2541
+    ts: 2026-10-09T05:52:30Z
+    service: edge-gateway
+    kind: config
+    actor: platform-bot
+    summary: Raise upstream keepalive timeout
+    details: {upstream.keepalive_timeout_s: "60 -> 75"}
+
+effects:
+  - kind: log
+    service: edge-gateway
+    level: ERROR
+    template: "TLS handshake with auth-service failed: x509: certificate has expired or is not yet valid (notAfter 2026-10-09T06:00:00Z)"
+    start: 2026-10-09T06:00:05Z
+    rate_per_min: 70
+  - {kind: metric, service: edge-gateway, metric: error_rate, start: 2026-10-09T06:00:00Z, to: 0.11, noise: 0.1}
+  - {kind: metric, service: auth-service, metric: rps, start: 2026-10-09T06:00:00Z, factor: 0.08}
+  - {kind: metric, service: auth-service, metric: cpu_util, start: 2026-10-09T06:00:00Z, factor: 0.5}
+  - kind: log
+    service: auth-service
+    level: WARN
+    template: "http: TLS handshake error from 10.{a}.{b}.{c}:{port}: remote error: tls: bad certificate"
+    start: 2026-10-09T06:00:05Z
+    rate_per_min: 60
+    fields:
+      a: {uniform: [0, 3]}
+      b: {uniform: [0, 255]}
+      c: {uniform: [1, 254]}
+      port: {uniform: [32768, 60999]}
+
+faults:
+  - {tool: query_logs, kind: partial, missing_az: az-b}

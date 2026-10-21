@@ -1,0 +1,15 @@
+id: T09
+title: Notification pods restarting
+severity: sev3
+reported_at: 2026-10-14T08:20:00Z
+reported_by: on-call (engagement)
+summary: >
+  notification-service pods have been OOMKilled and restarting since about 07:50 UTC. Push
+  and email notifications are backing up.
+symptoms:
+  - notification-service pods OOMKilled and restarting
+  - Memory climbing before each restart
+  - Consumer lag growing
+reported_services: [notification-service, kafka]
+responder_notes:
+  - "This looks exactly like the January marketing-campaign incident. Probably traffic again; can we just add memory and scale out?"

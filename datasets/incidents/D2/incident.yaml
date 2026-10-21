@@ -1,0 +1,15 @@
+id: D2
+title: Checkout failures and payment timeouts
+severity: sev2
+reported_at: 2026-10-20T10:09:00Z
+reported_by: on-call (payments)
+summary: >
+  Checkout success rate dropped sharply a few minutes after 10:00 UTC. Customers see
+  "payment could not be processed" and support tickets are climbing.
+symptoms:
+  - POST /v1/checkout failing for roughly one request in seven
+  - payments-service p99 latency above 4 seconds
+reported_services: [edge-gateway, payments-service]
+responder_notes:
+  - "notification-service v3.8.1 rolled out at 10:02, right before this started. Could be related?"
+  - "Payments database dashboards look healthy to me."

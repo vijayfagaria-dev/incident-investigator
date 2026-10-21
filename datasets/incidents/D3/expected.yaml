@@ -1,0 +1,19 @@
+split: dev
+tags: [tool-failure, misleading]
+expected_outcome: conclusive
+root_cause:
+  service: portfolio-service
+  category: code_regression
+  trigger: chg:2341
+key_evidence:
+  changes: [chg:2341]
+  metrics: [metric:portfolio-service/error_rate]
+  log_patterns:
+    - {service: portfolio-service, contains: "JsonMappingException"}
+red_herrings: [chg:2338]
+notes: >
+  The v5.3.0 deploy breaks serialization of positions with NaN unrealised P&L. Errors start
+  two minutes after the rollout and name the field. The market-data batching change is
+  earlier and harmless: market-data error rates and latency stay normal. Metrics queries
+  time out at first and logs from az-c are missing, so the investigation has to retry and
+  work with partial logs.

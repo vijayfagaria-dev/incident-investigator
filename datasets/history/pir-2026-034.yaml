@@ -1,0 +1,15 @@
+id: pir:2026-034
+date: 2026-07-16
+title: Checkout alert storm caused by synthetic monitor
+services: [edge-gateway, payments-service]
+symptoms:
+  - checkout availability alert firing every 5 minutes
+  - real customer checkout success rate normal
+root_cause:
+  service: edge-gateway
+  category: config_change
+summary: >
+  The synthetic checkout monitor was pointed at a staging card token that production
+  rejects. Customer traffic was never affected.
+resolution: >
+  Fixed the monitor configuration and required a second signal before paging for checkout.

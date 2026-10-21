@@ -1,0 +1,15 @@
+id: pir:2026-029
+date: 2026-06-04
+title: market-data-service memory leak in websocket fan-out
+services: [market-data-service]
+symptoms:
+  - market-data-service memory climbing about 4% per hour
+  - pods OOMKilled roughly every 18 hours
+root_cause:
+  service: market-data-service
+  category: resource_exhaustion
+summary: >
+  Disconnected websocket subscribers were never removed from the fan-out map, so memory
+  grew with every reconnect.
+resolution: >
+  Fixed subscriber cleanup and added a memory growth alert.

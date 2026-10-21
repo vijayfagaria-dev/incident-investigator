@@ -1,0 +1,15 @@
+id: pir:2025-063
+date: 2025-11-19
+title: Intermittent gateway errors from one availability zone
+services: [edge-gateway, orders-service, payments-service]
+symptoms:
+  - edge-gateway error rate around 3%, spread across all routes
+  - errors only from pods in az-b
+root_cause:
+  service: edge-gateway
+  category: infrastructure_failure
+summary: >
+  A faulty top-of-rack switch in az-b dropped a fraction of packets. Aggregate dashboards
+  showed a mild error rate; per-zone breakdowns showed az-b pods failing far more often.
+resolution: >
+  Drained az-b until the cloud provider replaced the switch. Added per-zone error panels.

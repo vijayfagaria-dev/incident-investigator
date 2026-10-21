@@ -1,0 +1,14 @@
+id: T01
+title: Order edits failing
+severity: sev3
+reported_at: 2026-10-05T13:58:00Z
+reported_by: support desk
+summary: >
+  Since about 13:35 UTC customers who try to change the price or quantity of an open order
+  get "something went wrong". Placing and cancelling orders still works.
+symptoms:
+  - Editing an open order fails with an error
+  - edge-gateway shows more 5xx on order routes
+reported_services: [orders-service, edge-gateway]
+responder_notes:
+  - "Nothing unusual on the orders database dashboards."

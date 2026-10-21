@@ -1,0 +1,17 @@
+split: test
+tags: [misleading]
+expected_outcome: conclusive
+root_cause:
+  service: orders-service
+  category: feature_flag
+  trigger: chg:2534
+key_evidence:
+  changes: [chg:2534]
+  metrics: [metric:orders-service/error_rate]
+  log_patterns:
+    - {service: orders-service, contains: "PricingPathV2"}
+red_herrings: []
+notes: >
+  There really were no deploys, which is the trap: the change is a feature flag rolled out
+  to 20% of accounts at 15:22, and the errors start the next minute in PricingPathV2.
+  market-data is healthy, so bad prices are not the explanation.

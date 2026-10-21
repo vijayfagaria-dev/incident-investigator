@@ -1,0 +1,17 @@
+id: T08
+title: Deposits and checkout failing overnight
+severity: sev2
+reported_at: 2026-10-13T02:35:00Z
+reported_by: on-call (payments)
+summary: >
+  Deposits and checkout started failing shortly after 02:00 UTC and it is getting worse.
+  All payments-service pods are healthy and passing health checks, and nothing was
+  deployed tonight.
+symptoms:
+  - POST /v1/checkout and POST /v1/deposits failing with 500
+  - payments-service health checks green
+  - Failure rate growing over time
+reported_services: [payments-service]
+responder_notes:
+  - "Health checks are green, so this is probably bank-rails again. They had maintenance in February."
+  - "The bank-rails timeout was changed at 01:38."

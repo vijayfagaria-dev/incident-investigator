@@ -1,0 +1,15 @@
+id: pir:2025-046
+date: 2025-09-15
+title: Trade confirmations delayed at market open
+services: [notification-service, kafka]
+symptoms:
+  - notification-service consumer lag above 200,000 messages
+  - trade confirmation emails delayed by up to 25 minutes
+root_cause:
+  service: notification-service
+  category: capacity_saturation
+summary: >
+  Market open after a holiday produced 4x the usual order volume. notification-service ran
+  with two consumers and could not keep up.
+resolution: >
+  Scheduled scale-up before market open and an autoscaler on consumer lag.

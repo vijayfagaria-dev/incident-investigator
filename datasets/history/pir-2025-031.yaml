@@ -1,0 +1,17 @@
+id: pir:2025-031
+date: 2025-07-09
+title: Redis failover overloads postgres-orders
+services: [redis-cache, postgres-orders, portfolio-service, auth-service]
+symptoms:
+  - postgres-orders CPU at 100%
+  - portfolio-service and auth-service latency above 2 seconds
+  - redis-cache hit ratio dropped to 0.2
+root_cause:
+  service: redis-cache
+  category: infrastructure_failure
+summary: >
+  The redis-cache primary failed over. The new primary started cold, so cache misses sent
+  the full read load to postgres-orders, which looked like the root cause for the first
+  forty minutes of the incident.
+resolution: >
+  Enabled replica warm-up before promotion and request coalescing for portfolio reads.

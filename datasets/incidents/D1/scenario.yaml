@@ -1,0 +1,81 @@
+# orders-service v2.14.0 adds fill details to order history and loads them one order
+# at a time (an N+1 query). Each history request now issues dozens of queries, which
+# saturates postgres-orders and slows everything that shares it.
+
+seed: 1001
+window: {start: 2026-10-14T12:00:00Z, end: 2026-10-14T15:00:00Z}
+
+changes:
+  - id: chg:2179
+    ts: 2026-10-14T12:20:14Z
+    service: market-data-service
+    kind: config
+    actor: ana.costa
+    summary: Raise quote cache TTL from 2s to 3s
+    details: {quotes.cache.ttl_s: "2 -> 3"}
+  - id: chg:2183
+    ts: 2026-10-14T12:47:52Z
+    service: redis-cache
+    kind: infra
+    actor: platform-automation
+    summary: Rolling upgrade of redis-cache from 7.2.4 to 7.2.5
+    details: {from: "7.2.4", to: "7.2.5", strategy: rolling}
+  - id: chg:2187
+    ts: 2026-10-14T13:12:30Z
+    service: orders-service
+    kind: deploy
+    actor: ci/deploy-bot
+    summary: "orders-service v2.14.0: show fill details in order history"
+    details: {version: "2.14.0", previous_version: "2.13.2", commit: a41c9e0, diff: "+382 / -57"}
+
+effects:
+  # The rolling Redis upgrade briefly drops client connections and nothing else.
+  - {kind: metric, service: redis-cache, metric: connected_clients, start: 2026-10-14T12:48:00Z, end: 2026-10-14T12:52:00Z, factor: 0.8}
+
+  # The N+1 query: many small queries per order history request.
+  - {kind: metric, service: orders-service, metric: db_queries_per_request, start: 2026-10-14T13:14:00Z, shape: ramp, ramp_minutes: 3, to: 46, noise: 0.08}
+  - {kind: metric, service: orders-service, metric: db_pool_in_use, start: 2026-10-14T13:14:00Z, shape: ramp, ramp_minutes: 5, to: 38, noise: 0.04}
+  - {kind: metric, service: orders-service, metric: latency_p50_ms, start: 2026-10-14T13:15:00Z, shape: ramp, ramp_minutes: 4, to: 640}
+  - {kind: metric, service: orders-service, metric: latency_p99_ms, start: 2026-10-14T13:15:00Z, shape: ramp, ramp_minutes: 4, to: 3600}
+  - {kind: metric, service: orders-service, metric: error_rate, start: 2026-10-14T13:18:00Z, shape: ramp, ramp_minutes: 3, to: 0.06, noise: 0.15}
+  - {kind: metric, service: orders-service, metric: cpu_util, start: 2026-10-14T13:14:00Z, factor: 1.25}
+
+  # The shared database saturates.
+  - {kind: metric, service: postgres-orders, metric: cpu_util, start: 2026-10-14T13:14:00Z, shape: ramp, ramp_minutes: 6, to: 0.91, noise: 0.03}
+  - {kind: metric, service: postgres-orders, metric: active_connections, start: 2026-10-14T13:14:00Z, shape: ramp, ramp_minutes: 5, factor: 1.6}
+  - {kind: metric, service: postgres-orders, metric: query_latency_p99_ms, start: 2026-10-14T13:16:00Z, shape: ramp, ramp_minutes: 4, to: 140}
+
+  # Collateral: portfolio-service reads the same database.
+  - {kind: metric, service: portfolio-service, metric: latency_p99_ms, start: 2026-10-14T13:17:00Z, factor: 1.8}
+
+  # The gateway sees the failures.
+  - {kind: metric, service: edge-gateway, metric: error_rate, start: 2026-10-14T13:18:00Z, shape: ramp, ramp_minutes: 3, to: 0.012, noise: 0.15}
+  - {kind: metric, service: edge-gateway, metric: latency_p99_ms, start: 2026-10-14T13:16:00Z, shape: ramp, ramp_minutes: 4, to: 2400}
+
+  - kind: log
+    service: orders-service
+    level: WARN
+    template: "query budget exceeded on GET /v1/orders: {queries} queries (budget 20)"
+    start: 2026-10-14T13:14:10Z
+    rate_per_min: 40
+    fields: {queries: {uniform: [38, 160]}}
+  - kind: log
+    service: postgres-orders
+    level: WARN
+    template: "duration: {ms} ms  statement: SELECT * FROM order_fills WHERE order_id = $1"
+    start: 2026-10-14T13:16:00Z
+    rate_per_min: 25
+    fields: {ms: {uniform: [150, 620]}}
+  - kind: log
+    service: edge-gateway
+    level: WARN
+    template: "upstream orders-service timed out after 3000ms (route /v1/orders)"
+    start: 2026-10-14T13:18:00Z
+    rate_per_min: 8
+  - kind: log
+    service: orders-service
+    level: INFO
+    template: "orders-service 2.14.0 started (commit a41c9e0)"
+    start: 2026-10-14T13:12:40Z
+    end: 2026-10-14T13:13:40Z
+    count: 4

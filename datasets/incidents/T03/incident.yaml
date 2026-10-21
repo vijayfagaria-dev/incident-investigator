@@ -1,0 +1,16 @@
+id: T03
+title: Portfolio and order pages slow, users logged out
+severity: sev2
+reported_at: 2026-10-07T10:40:00Z
+reported_by: on-call (platform)
+summary: >
+  From around 10:13 UTC portfolio pages became very slow and some fail. Several customers
+  say they were logged out. postgres-orders CPU is pinned near 100%.
+symptoms:
+  - GET /v1/portfolio p99 above 2.5 seconds
+  - postgres-orders CPU near 100%
+  - Some customers forced to log in again
+reported_services: [portfolio-service, postgres-orders]
+responder_notes:
+  - "The orders database is clearly overloaded. Someone changed its config this morning; that has to be it."
+  - "Can we fail postgres-orders over to the replica?"

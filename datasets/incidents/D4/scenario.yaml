@@ -1,0 +1,41 @@
+# A network policy change on redis-cache makes connections from auth-service flap, so some
+# session lookups time out. The flapping stops on its own. Almost none of this can be seen:
+# the change feed is down, auth and redis metrics are unavailable, and logs older than 08:10
+# have already expired. A careful investigation should say it cannot tell.
+
+seed: 4004
+window: {start: 2026-10-18T06:00:00Z, end: 2026-10-18T09:00:00Z}
+
+changes:
+  - id: chg:2402
+    ts: 2026-10-18T07:40:12Z
+    service: redis-cache
+    kind: infra
+    actor: platform-automation
+    summary: Apply updated network policy to redis-cache
+    details: {policy: "redis-ingress-v7", previous: "redis-ingress-v6"}
+
+effects:
+  - {kind: metric, service: auth-service, metric: error_rate, start: 2026-10-18T07:45:00Z, end: 2026-10-18T08:12:00Z, to: 0.05, noise: 0.3}
+  - {kind: metric, service: redis-cache, metric: connected_clients, start: 2026-10-18T07:45:00Z, end: 2026-10-18T08:12:00Z, factor: 0.7}
+  - kind: log
+    service: auth-service
+    level: WARN
+    template: "session lookup failed: redis timeout after 200ms (attempt {attempt})"
+    start: 2026-10-18T07:45:00Z
+    end: 2026-10-18T08:12:00Z
+    rate_per_min: 6
+    fields: {attempt: {choice: [1, 2]}}
+  - {kind: metric, service: edge-gateway, metric: error_rate, start: 2026-10-18T07:45:00Z, end: 2026-10-18T08:12:00Z, to: 0.006, noise: 0.3}
+  - kind: log
+    service: edge-gateway
+    level: WARN
+    template: "upstream auth-service returned 503 (route /v1/session)"
+    start: 2026-10-18T07:45:00Z
+    end: 2026-10-18T08:12:00Z
+    rate_per_min: 3
+
+faults:
+  - {tool: get_change_history, kind: unavailable}
+  - {tool: query_metrics, kind: partial, missing_services: [auth-service, redis-cache]}
+  - {tool: query_logs, kind: partial, missing_before: 2026-10-18T08:10:00Z}

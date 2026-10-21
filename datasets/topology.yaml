@@ -1,0 +1,222 @@
+# The simulated brokerage platform every incident runs on.
+#
+# Metric baselines are per-minute averages in normal operation; `noise` is the relative
+# standard deviation of each sample. Metrics that `follows_traffic` swing with the daily
+# trading cycle, peaking around `peak_hour_utc`.
+
+availability_zones: [az-a, az-b, az-c]
+
+traffic:
+  diurnal_amplitude: 0.35
+  peak_hour_utc: 14.5
+
+metric_profiles:
+  http_service:
+    rps:            {unit: req/s, baseline: 120, noise: 0.06, follows_traffic: true}
+    error_rate:     {unit: ratio, baseline: 0.002, noise: 0.35, ceiling: 1}
+    latency_p50_ms: {unit: ms, baseline: 45, noise: 0.08}
+    latency_p99_ms: {unit: ms, baseline: 260, noise: 0.12}
+    cpu_util:       {unit: ratio, baseline: 0.38, noise: 0.06, follows_traffic: true, ceiling: 1}
+    mem_util:       {unit: ratio, baseline: 0.55, noise: 0.02, ceiling: 1}
+  postgres:
+    cpu_util:             {unit: ratio, baseline: 0.32, noise: 0.07, follows_traffic: true, ceiling: 1}
+    active_connections:   {unit: connections, baseline: 64, noise: 0.08, follows_traffic: true}
+    query_latency_p99_ms: {unit: ms, baseline: 18, noise: 0.12}
+    replication_lag_s:    {unit: s, baseline: 0.4, noise: 0.3}
+  redis:
+    cpu_util:          {unit: ratio, baseline: 0.22, noise: 0.08, follows_traffic: true, ceiling: 1}
+    mem_util:          {unit: ratio, baseline: 0.61, noise: 0.01, ceiling: 1}
+    hit_ratio:         {unit: ratio, baseline: 0.94, noise: 0.01, ceiling: 1}
+    connected_clients: {unit: connections, baseline: 410, noise: 0.04}
+  kafka:
+    messages_in_per_s:           {unit: msg/s, baseline: 85, noise: 0.08, follows_traffic: true}
+    broker_cpu_util:             {unit: ratio, baseline: 0.27, noise: 0.06, ceiling: 1}
+    under_replicated_partitions: {unit: partitions, baseline: 0, noise: 0}
+
+nodes:
+  - name: edge-gateway
+    kind: service
+    team: platform
+    pods: 6
+    profile: http_service
+    metrics:
+      rps:            {unit: req/s, baseline: 520, noise: 0.05, follows_traffic: true}
+      latency_p50_ms: {unit: ms, baseline: 62, noise: 0.06}
+      latency_p99_ms: {unit: ms, baseline: 340, noise: 0.10}
+    routes:
+      - GET /v1/portfolio
+      - GET /v1/orders
+      - POST /v1/orders
+      - POST /v1/checkout
+      - POST /v1/session
+      - GET /v1/quotes
+    background_logs:
+      - level: WARN
+        template: "client closed connection before response (route {route})"
+        rate_per_hour: 20
+        fields: {route: {choice: [/v1/portfolio, /v1/quotes, /v1/orders]}}
+
+  - name: auth-service
+    kind: service
+    team: identity
+    pods: 3
+    profile: http_service
+    routes: [POST /v1/session, POST /v1/token/refresh, GET /v1/session]
+    background_logs:
+      - level: WARN
+        template: "login failed for account {account}: invalid credentials"
+        rate_per_hour: 30
+        fields: {account: {uniform: [100000, 999999]}}
+
+  - name: orders-service
+    kind: service
+    team: trading
+    pods: 4
+    profile: http_service
+    metrics:
+      db_pool_in_use:          {unit: connections, baseline: 14, noise: 0.15, follows_traffic: true}
+      db_pool_max_connections: {unit: connections, baseline: 40, noise: 0}
+      db_queries_per_request:  {unit: queries, baseline: 4.2, noise: 0.05}
+    routes: [GET /v1/orders, POST /v1/orders, "GET /v1/orders/{id}", "DELETE /v1/orders/{id}"]
+    background_logs:
+      - level: WARN
+        template: "order {order} rejected: insufficient buying power"
+        rate_per_hour: 25
+        fields: {order: {uniform: [5000000, 5999999]}}
+      - level: WARN
+        template: "slow query: SELECT * FROM orders WHERE account_id = $1 took {ms}ms"
+        rate_per_hour: 4
+        fields: {ms: {uniform: [210, 480]}}
+
+  - name: portfolio-service
+    kind: service
+    team: trading
+    pods: 3
+    profile: http_service
+    metrics:
+      latency_p50_ms: {unit: ms, baseline: 70, noise: 0.08}
+      latency_p99_ms: {unit: ms, baseline: 420, noise: 0.12}
+    routes: [GET /v1/portfolio, GET /v1/portfolio/positions, GET /v1/portfolio/performance]
+    background_logs:
+      - level: WARN
+        template: "quote for {symbol} older than 5s; serving cached value"
+        rate_per_hour: 12
+        fields: {symbol: {choice: [AAPL, MSFT, NVDA, TSLA, AMZN, GOOGL]}}
+
+  - name: market-data-service
+    kind: service
+    team: market-data
+    pods: 3
+    profile: http_service
+    metrics:
+      rps:                   {unit: req/s, baseline: 340, noise: 0.05, follows_traffic: true}
+      vendor_latency_p99_ms: {unit: ms, baseline: 180, noise: 0.10}
+      vendor_error_rate:     {unit: ratio, baseline: 0.001, noise: 0.4, ceiling: 1}
+    routes: [GET /v1/quotes, "GET /v1/quotes/{symbol}"]
+    background_logs:
+      - level: WARN
+        template: "quotes-vendor responded 429; backing off {ms}ms"
+        rate_per_hour: 6
+        fields: {ms: {uniform: [200, 800]}}
+
+  - name: payments-service
+    kind: service
+    team: payments
+    pods: 3
+    profile: http_service
+    metrics:
+      latency_p50_ms:            {unit: ms, baseline: 85, noise: 0.08}
+      latency_p99_ms:            {unit: ms, baseline: 480, noise: 0.10}
+      db_pool_in_use:            {unit: connections, baseline: 9, noise: 0.15, follows_traffic: true}
+      db_pool_max_connections:   {unit: connections, baseline: 50, noise: 0}
+      bank_rails_latency_p99_ms: {unit: ms, baseline: 420, noise: 0.10}
+    routes: [POST /v1/checkout, POST /v1/deposits, POST /v1/withdrawals, "GET /v1/payments/{id}"]
+    background_logs:
+      - level: WARN
+        template: "card authorization declined: {reason}"
+        rate_per_hour: 40
+        fields: {reason: {choice: [insufficient_funds, do_not_honor, expired_card, suspected_fraud]}}
+      - level: WARN
+        template: "bank-rails returned 409 for idempotency key {key}; treating as duplicate"
+        rate_per_hour: 5
+        fields: {key: {uniform: [10000000, 99999999]}}
+
+  - name: notification-service
+    kind: service
+    team: engagement
+    pods: 2
+    profile: http_service
+    metrics:
+      consumer_lag: {unit: messages, baseline: 120, noise: 0.3}
+    routes: [POST /internal/notify]
+    access_logs_per_pod_minute: 2
+    background_logs:
+      - level: WARN
+        template: "email to {domain} deferred by smtp relay"
+        rate_per_hour: 8
+        fields: {domain: {choice: [gmail.com, outlook.com, yahoo.com, icloud.com]}}
+
+  - name: postgres-orders
+    kind: datastore
+    team: data-platform
+    pods: 2
+    profile: postgres
+    metrics:
+      active_connections: {unit: connections, baseline: 70, noise: 0.08, follows_traffic: true}
+    background_logs:
+      - level: WARN
+        template: "checkpoints are occurring too frequently ({seconds} seconds apart)"
+        rate_per_hour: 2
+        fields: {seconds: {uniform: [18, 28]}}
+
+  - name: postgres-payments
+    kind: datastore
+    team: data-platform
+    pods: 2
+    profile: postgres
+    metrics:
+      active_connections: {unit: connections, baseline: 32, noise: 0.08, follows_traffic: true}
+    background_logs:
+      - level: WARN
+        template: "autovacuum: table payments.ledger_entries has {dead} dead tuples"
+        rate_per_hour: 1
+        fields: {dead: {uniform: [120000, 400000]}}
+
+  - name: redis-cache
+    kind: datastore
+    team: platform
+    pods: 3
+    profile: redis
+
+  - name: kafka
+    kind: queue
+    team: platform
+    pods: 3
+    profile: kafka
+
+  - name: quotes-vendor
+    kind: external
+
+  - name: bank-rails
+    kind: external
+
+edges:
+  - {source: edge-gateway, target: auth-service, protocol: http, criticality: hard, timeout_ms: 1000}
+  - {source: edge-gateway, target: orders-service, protocol: http, criticality: hard, timeout_ms: 3000}
+  - {source: edge-gateway, target: portfolio-service, protocol: http, criticality: hard, timeout_ms: 3000}
+  - {source: edge-gateway, target: payments-service, protocol: http, criticality: hard, timeout_ms: 5000}
+  - {source: edge-gateway, target: market-data-service, protocol: http, criticality: hard, timeout_ms: 2000}
+  - {source: auth-service, target: redis-cache, protocol: redis, criticality: hard, timeout_ms: 200}
+  - {source: orders-service, target: postgres-orders, protocol: sql, criticality: hard, timeout_ms: 2000}
+  - {source: orders-service, target: market-data-service, protocol: grpc, criticality: hard, timeout_ms: 500}
+  - {source: orders-service, target: kafka, protocol: kafka, criticality: soft}
+  - {source: orders-service, target: redis-cache, protocol: redis, criticality: soft, timeout_ms: 100}
+  - {source: portfolio-service, target: postgres-orders, protocol: sql, criticality: hard, timeout_ms: 2000}
+  - {source: portfolio-service, target: market-data-service, protocol: grpc, criticality: hard, timeout_ms: 500}
+  - {source: portfolio-service, target: redis-cache, protocol: redis, criticality: soft, timeout_ms: 100}
+  - {source: market-data-service, target: quotes-vendor, protocol: https, criticality: hard, timeout_ms: 800}
+  - {source: market-data-service, target: redis-cache, protocol: redis, criticality: soft, timeout_ms: 50}
+  - {source: payments-service, target: postgres-payments, protocol: sql, criticality: hard, timeout_ms: 2000}
+  - {source: payments-service, target: bank-rails, protocol: https, criticality: hard, timeout_ms: 4000}
+  - {source: payments-service, target: kafka, protocol: kafka, criticality: soft}
+  - {source: notification-service, target: kafka, protocol: kafka, criticality: hard}

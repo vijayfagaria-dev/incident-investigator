@@ -1,0 +1,16 @@
+id: pir:2025-058
+date: 2025-10-28
+title: Order placement errors for a subset of accounts
+services: [orders-service]
+symptoms:
+  - POST /v1/orders returning 500 for about 10% of accounts
+  - orders-service logging "NullPointerException in FeeCalculator"
+root_cause:
+  service: orders-service
+  category: feature_flag
+summary: >
+  The new_fee_calc flag was rolled out to 10% of accounts. Accounts without a fee tier hit
+  a null path in the new calculator. No deploy happened during the incident.
+resolution: >
+  Rolled the flag back to 0%, fixed the null handling, and added flag changes to the
+  incident timeline dashboard.

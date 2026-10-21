@@ -1,0 +1,15 @@
+id: T06
+title: Intermittent errors across the app
+severity: sev3
+reported_at: 2026-10-10T11:50:00Z
+reported_by: support desk
+summary: >
+  Customers report occasional errors on many screens since about 11:15 UTC: portfolio,
+  orders, payments. Retrying usually works. Dashboards show only a small rise in errors.
+symptoms:
+  - About 2% of requests failing across many routes
+  - Retries usually succeed
+reported_services: [edge-gateway]
+responder_notes:
+  - "orders-service v2.16.0 rolled out at 11:05. Maybe it is that?"
+  - "Overall latency and error graphs barely moved, so this might be client-side."

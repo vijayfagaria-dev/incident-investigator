@@ -1,0 +1,20 @@
+split: test
+tags: [misleading]
+expected_outcome: conclusive
+root_cause:
+  service: notification-service
+  category: code_regression
+  trigger: chg:2591
+acceptable_alternates:
+  - {service: notification-service, category: resource_exhaustion, trigger: chg:2591}
+key_evidence:
+  changes: [chg:2591]
+  metrics: [metric:notification-service/mem_util]
+  log_patterns:
+    - {service: notification-service, contains: "OOMKilled"}
+red_herrings: [pir:2026-003]
+notes: >
+  The symptoms match the January postmortem, which blamed campaign traffic, but traffic
+  and kafka input are normal this time. Memory starts climbing right after the v3.9.2
+  deploy at 07:12, forty minutes before the first OOMKill. Calling it a leak introduced by
+  the deploy (resource exhaustion) is accepted as well as a code regression.

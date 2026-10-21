@@ -1,0 +1,15 @@
+id: pir:2025-071
+date: 2025-12-03
+title: Gateway rejecting legitimate traffic after rate-limit change
+services: [edge-gateway]
+symptoms:
+  - edge-gateway returning 429 for many clients
+  - all downstream services healthy
+root_cause:
+  service: edge-gateway
+  category: config_change
+summary: >
+  A rate-limit config intended for a single partner key was applied as the global default,
+  limiting every client to 10 requests per second.
+resolution: >
+  Reverted the config and added a schema check that rejects global limits below 100 rps.

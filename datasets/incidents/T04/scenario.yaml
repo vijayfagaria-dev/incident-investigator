@@ -1,0 +1,46 @@
+# A feature flag sends 20% of accounts down a new pricing path. Its price-collar maths
+# divides two BigDecimals without a rounding mode and throws for some prices, so the same
+# customers fail every time. Nothing was deployed.
+
+seed: 5104
+window: {start: 2026-10-08T14:00:00Z, end: 2026-10-08T17:00:00Z}
+
+changes:
+  - id: chg:2531
+    ts: 2026-10-08T14:26:30Z
+    service: payments-service
+    kind: secret_rotation
+    actor: vault-rotator
+    summary: Rotate bank-rails API key
+    details: {secret: bank-rails/api-key, version: "v14 -> v15"}
+  - id: chg:2534
+    ts: 2026-10-08T15:22:07Z
+    service: orders-service
+    kind: feature_flag
+    actor: lena.fischer
+    summary: Roll out new_pricing_path to 20% of accounts
+    details: {flag: new_pricing_path, rollout: "0% -> 20%"}
+  - id: chg:2536
+    ts: 2026-10-08T15:05:40Z
+    service: auth-service
+    kind: config
+    actor: config-bot
+    summary: Lower token refresh grace period
+    details: {token.refresh_grace_s: "120 -> 90"}
+
+effects:
+  - {kind: metric, service: orders-service, metric: error_rate, start: 2026-10-08T15:23:00Z, to: 0.03, noise: 0.2}
+  - kind: log
+    service: orders-service
+    level: ERROR
+    template: "order {order} failed: ArithmeticException: Non-terminating decimal expansion; no exact representable decimal result (at PricingPathV2.applyCollar)"
+    start: 2026-10-08T15:23:00Z
+    rate_per_min: 12
+    fields: {order: {uniform: [5000000, 5999999]}}
+  - {kind: metric, service: edge-gateway, metric: error_rate, start: 2026-10-08T15:23:00Z, to: 0.006, noise: 0.25}
+  - kind: log
+    service: edge-gateway
+    level: WARN
+    template: "upstream orders-service returned 500 (route POST /v1/orders)"
+    start: 2026-10-08T15:23:00Z
+    rate_per_min: 11

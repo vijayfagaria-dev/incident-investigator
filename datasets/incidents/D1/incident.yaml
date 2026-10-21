@@ -1,0 +1,14 @@
+id: D1
+title: Order history timing out
+severity: sev2
+reported_at: 2026-10-14T13:24:00Z
+reported_by: on-call (trading)
+summary: >
+  Customers report that the order history page spins and then shows an empty list.
+  The order history endpoint started slowing down shortly after 13:15 UTC.
+symptoms:
+  - GET /v1/orders p99 latency above 3 seconds
+  - Some order history requests fail with 5xx at the gateway
+reported_services: [orders-service, edge-gateway]
+responder_notes:
+  - "Database CPU alarm fired for postgres-orders at 13:19."

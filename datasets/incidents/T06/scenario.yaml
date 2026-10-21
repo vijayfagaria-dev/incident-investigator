@@ -1,0 +1,66 @@
+# The network in az-b starts dropping connections at 11:15. Only the gateway pods and
+# service pods in az-b are affected, so the aggregate graphs move a little while one zone
+# fails hard. An orders-service deploy ten minutes earlier logs some cache warm-up noise.
+
+seed: 5106
+window: {start: 2026-10-10T10:00:00Z, end: 2026-10-10T13:00:00Z}
+
+changes:
+  - id: chg:2557
+    ts: 2026-10-10T10:20:00Z
+    service: notification-service
+    kind: deploy
+    actor: ci/deploy-bot
+    summary: "notification-service v3.9.1: fix unsubscribe link encoding"
+    details: {version: "3.9.1", previous_version: "3.9.0", commit: c40b7d2, diff: "+9 / -3"}
+  - id: chg:2561
+    ts: 2026-10-10T11:05:12Z
+    service: orders-service
+    kind: deploy
+    actor: ci/deploy-bot
+    summary: "orders-service v2.16.0: batch fee schedule lookups"
+    details: {version: "2.16.0", previous_version: "2.15.2", commit: 8b20f4e, diff: "+142 / -97"}
+
+effects:
+  - kind: log
+    service: edge-gateway
+    level: ERROR
+    template: "upstream connect error or disconnect/reset before headers: connection timeout to {upstream}"
+    start: 2026-10-10T11:15:00Z
+    rate_per_min: 40
+    az: az-b
+    fields: {upstream: {choice: [orders-service, portfolio-service, payments-service, auth-service, market-data-service]}}
+  - {kind: metric, service: edge-gateway, metric: error_rate, start: 2026-10-10T11:15:00Z, to: 0.02, noise: 0.2}
+  - {kind: metric, service: edge-gateway, metric: latency_p99_ms, start: 2026-10-10T11:15:00Z, factor: 1.5}
+  - kind: log
+    service: orders-service
+    level: WARN
+    template: "connection to postgres-orders reset by peer; retrying"
+    start: 2026-10-10T11:15:00Z
+    rate_per_min: 6
+    az: az-b
+  - kind: log
+    service: portfolio-service
+    level: WARN
+    template: "gRPC call to market-data-service failed: UNAVAILABLE (connection reset)"
+    start: 2026-10-10T11:15:00Z
+    rate_per_min: 5
+    az: az-b
+  - {kind: metric, service: orders-service, metric: error_rate, start: 2026-10-10T11:15:00Z, to: 0.008, noise: 0.25}
+
+  # Red herring: the new orders-service warms its fee cache after the deploy.
+  - kind: log
+    service: orders-service
+    level: INFO
+    template: "application started: orders-service 2.16.0 (commit 8b20f4e)"
+    start: 2026-10-10T11:05:20Z
+    end: 2026-10-10T11:07:00Z
+    count: 4
+  - kind: log
+    service: orders-service
+    level: WARN
+    template: "fee cache cold; fetching {n} fee schedules"
+    start: 2026-10-10T11:06:00Z
+    end: 2026-10-10T11:20:00Z
+    rate_per_min: 3
+    fields: {n: {uniform: [40, 120]}}

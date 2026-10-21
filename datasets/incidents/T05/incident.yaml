@@ -1,0 +1,15 @@
+id: T05
+title: Nobody can log in
+severity: sev1
+reported_at: 2026-10-09T06:25:00Z
+reported_by: on-call (identity)
+summary: >
+  Logins and token refreshes have been failing for everyone since about 06:00 UTC. The app
+  shows "unable to sign in".
+symptoms:
+  - POST /v1/session failing for all users
+  - edge-gateway 5xx on session routes
+reported_services: [edge-gateway, auth-service]
+responder_notes:
+  - "The gateway config was changed at 05:52, just before this started. Roll it back?"
+  - "auth-service pods are up and their health checks pass."

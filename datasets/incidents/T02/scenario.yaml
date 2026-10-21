@@ -1,0 +1,85 @@
+# The quotes vendor degrades at 14:40. market-data-service times out on it, and everything
+# that needs quotes (portfolio, order price checks) times out on market-data. A portfolio
+# deploy at 14:48 lands in the middle of it and logs new, harmless warnings.
+
+seed: 5102
+window: {start: 2026-10-06T13:00:00Z, end: 2026-10-06T16:00:00Z}
+
+changes:
+  - id: chg:2507
+    ts: 2026-10-06T13:22:15Z
+    service: notification-service
+    kind: config
+    actor: config-bot
+    summary: Raise SMTP send concurrency
+    details: {smtp.concurrency: "8 -> 12"}
+  - id: chg:2512
+    ts: 2026-10-06T14:48:30Z
+    service: portfolio-service
+    kind: deploy
+    actor: ci/deploy-bot
+    summary: "portfolio-service v5.4.0: add sector breakdown to performance page"
+    details: {version: "5.4.0", previous_version: "5.3.2", commit: 3c7d0aa, diff: "+410 / -88"}
+
+effects:
+  - {kind: metric, service: market-data-service, metric: vendor_latency_p99_ms, start: 2026-10-06T14:40:00Z, shape: ramp, ramp_minutes: 4, to: 2600}
+  - {kind: metric, service: market-data-service, metric: vendor_error_rate, start: 2026-10-06T14:40:00Z, shape: ramp, ramp_minutes: 4, to: 0.09, noise: 0.15}
+  - {kind: metric, service: market-data-service, metric: latency_p99_ms, start: 2026-10-06T14:41:00Z, shape: ramp, ramp_minutes: 3, to: 1900}
+  - {kind: metric, service: market-data-service, metric: error_rate, start: 2026-10-06T14:42:00Z, shape: ramp, ramp_minutes: 3, to: 0.035, noise: 0.15}
+  - kind: log
+    service: market-data-service
+    level: WARN
+    template: "quotes-vendor request timed out after 800ms (batch of {n} symbols)"
+    start: 2026-10-06T14:41:00Z
+    rate_per_min: 45
+    fields: {n: {uniform: [20, 50]}}
+  - kind: log
+    service: market-data-service
+    level: WARN
+    template: "circuit to quotes-vendor half-open; serving last known quotes"
+    start: 2026-10-06T14:47:00Z
+    rate_per_min: 4
+
+  # Callers of market-data hit their 500 ms gRPC deadline.
+  - {kind: metric, service: portfolio-service, metric: latency_p99_ms, start: 2026-10-06T14:42:00Z, shape: ramp, ramp_minutes: 3, to: 2700}
+  - {kind: metric, service: portfolio-service, metric: error_rate, start: 2026-10-06T14:42:00Z, shape: ramp, ramp_minutes: 3, to: 0.06, noise: 0.15}
+  - kind: log
+    service: portfolio-service
+    level: ERROR
+    template: "gRPC call to market-data-service failed: DEADLINE_EXCEEDED after 500ms (GetQuotes)"
+    start: 2026-10-06T14:42:00Z
+    rate_per_min: 30
+  - {kind: metric, service: orders-service, metric: error_rate, start: 2026-10-06T14:43:00Z, to: 0.02, noise: 0.2}
+  - kind: log
+    service: orders-service
+    level: WARN
+    template: "price check for order {order} failed: market-data-service DEADLINE_EXCEEDED; rejecting"
+    start: 2026-10-06T14:42:00Z
+    rate_per_min: 8
+    fields: {order: {uniform: [5000000, 5999999]}}
+  - {kind: metric, service: edge-gateway, metric: error_rate, start: 2026-10-06T14:43:00Z, shape: ramp, ramp_minutes: 3, to: 0.03, noise: 0.15}
+  - kind: log
+    service: edge-gateway
+    level: WARN
+    template: "upstream portfolio-service timed out after 3000ms (route /v1/portfolio)"
+    start: 2026-10-06T14:43:00Z
+    rate_per_min: 14
+
+  # Red herring: the deploy starts eight minutes after the onset and logs benign warnings.
+  - kind: log
+    service: portfolio-service
+    level: INFO
+    template: "application started: portfolio-service 5.4.0 (commit 3c7d0aa)"
+    start: 2026-10-06T14:48:40Z
+    end: 2026-10-06T14:50:00Z
+    count: 3
+  - kind: log
+    service: portfolio-service
+    level: WARN
+    template: "sector mapping missing for {symbol}; grouping under 'Other'"
+    start: 2026-10-06T14:49:00Z
+    rate_per_min: 10
+    fields: {symbol: {choice: [ARKK, VTI, SCHD, QQQM, BND, VXUS]}}
+
+faults:
+  - {tool: query_logs, kind: timeout, invocations: [1]}

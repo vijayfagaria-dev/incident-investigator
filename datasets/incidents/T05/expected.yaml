@@ -1,0 +1,17 @@
+split: test
+tags: [tool-failure, misleading]
+expected_outcome: conclusive
+root_cause:
+  service: auth-service
+  category: certificate_or_credential
+  trigger: null
+key_evidence:
+  metrics: [metric:auth-service/rps]
+  log_patterns:
+    - {service: edge-gateway, contains: "certificate has expired"}
+red_herrings: [chg:2541]
+notes: >
+  The gateway logs x509 expiry errors from 06:00:05, auth-service logs bad-certificate
+  handshakes, and auth-service traffic collapses because requests never reach it. The
+  gateway keepalive change at 05:52 does not explain certificate errors. Logs from az-b
+  are missing for the whole investigation, which leaves enough evidence from the other zones.

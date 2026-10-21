@@ -1,0 +1,20 @@
+split: dev
+tags: [control]
+expected_outcome: conclusive
+root_cause:
+  service: orders-service
+  category: code_regression
+  trigger: chg:2187
+key_evidence:
+  changes: [chg:2187]
+  metrics:
+    - metric:orders-service/db_queries_per_request
+    - metric:postgres-orders/cpu_util
+  log_patterns:
+    - {service: orders-service, contains: "query budget exceeded"}
+red_herrings: [chg:2183]
+notes: >
+  The v2.14.0 deploy introduced an N+1 query in order history. Queries per request jump
+  from about 4 to about 46 within minutes of the rollout, which saturates postgres-orders.
+  The database CPU alarm is a symptom, not the cause. The earlier Redis rolling upgrade
+  only dips client connections for a few minutes and is unrelated.

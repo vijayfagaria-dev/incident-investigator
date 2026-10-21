@@ -1,0 +1,21 @@
+split: dev
+tags: [misleading]
+expected_outcome: conclusive
+root_cause:
+  service: payments-service
+  category: config_change
+  trigger: chg:2290
+key_evidence:
+  changes: [chg:2290]
+  metrics:
+    - metric:payments-service/db_pool_in_use
+    - metric:payments-service/db_pool_max_connections
+  log_patterns:
+    - {service: payments-service, contains: "Connection is not available"}
+red_herrings: [chg:2291]
+notes: >
+  A config change shrank the payments database connection pool from 50 to 5. The
+  notification-service deploy 35 seconds later is unrelated: notification-service is not
+  on the checkout path and its new warnings are benign cache misses. The payments database
+  is underloaded, which rules out a database fault, and request volume is normal, which
+  rules out the traffic-surge explanation suggested by a past postmortem.

@@ -1,0 +1,16 @@
+id: pir:2025-024
+date: 2025-06-18
+title: Stale quotes and portfolio timeouts during vendor outage
+services: [market-data-service, portfolio-service, orders-service]
+symptoms:
+  - market-data-service vendor latency p99 above 2 seconds
+  - portfolio pages slow; order placement rejected for stale prices
+root_cause:
+  service: quotes-vendor
+  category: dependency_degradation
+summary: >
+  The quotes vendor had a regional degradation. market-data-service retried aggressively,
+  which made its own latency worse and timed out callers.
+resolution: >
+  Added a circuit breaker on the vendor client and a stale-quote fallback for portfolio
+  views. Order placement still refuses quotes older than 5 seconds.

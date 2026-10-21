@@ -1,0 +1,15 @@
+id: pir:2026-017
+date: 2026-03-19
+title: Portfolio performance page slow after schema migration
+services: [portfolio-service, postgres-orders]
+symptoms:
+  - GET /v1/portfolio/performance p99 above 6 seconds
+  - sequential scans on positions_history in postgres-orders
+root_cause:
+  service: postgres-orders
+  category: data_issue
+summary: >
+  A migration recreated positions_history without its account_id index. Only the
+  performance endpoint reads that table, so other routes were unaffected.
+resolution: >
+  Recreated the index concurrently and added index checks to the migration pipeline.

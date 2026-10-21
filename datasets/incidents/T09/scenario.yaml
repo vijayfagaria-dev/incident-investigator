@@ -1,0 +1,47 @@
+# notification-service v3.9.2 caches rendered templates per recipient locale and never
+# evicts them. Memory climbs from the deploy at 07:12 until pods are OOMKilled from 07:52.
+# Traffic is normal, unlike the past incident the responder remembers.
+
+seed: 5109
+window: {start: 2026-10-14T06:30:00Z, end: 2026-10-14T09:30:00Z}
+
+changes:
+  - id: chg:2588
+    ts: 2026-10-14T06:44:00Z
+    service: edge-gateway
+    kind: config
+    actor: platform-bot
+    summary: Add CORS origin for partner portal
+    details: {cors.allowed_origins: "+https://partners.example.com"}
+  - id: chg:2591
+    ts: 2026-10-14T07:12:30Z
+    service: notification-service
+    kind: deploy
+    actor: ci/deploy-bot
+    summary: "notification-service v3.9.2: cache rendered templates per recipient locale"
+    details: {version: "3.9.2", previous_version: "3.9.1", commit: 0f6c3a8, diff: "+88 / -21"}
+
+effects:
+  - kind: log
+    service: notification-service
+    level: INFO
+    template: "application started: notification-service 3.9.2 (commit 0f6c3a8)"
+    start: 2026-10-14T07:12:40Z
+    end: 2026-10-14T07:14:00Z
+    count: 2
+  - {kind: metric, service: notification-service, metric: mem_util, start: 2026-10-14T07:13:00Z, shape: ramp, ramp_minutes: 40, to: 0.97, noise: 0.01}
+  - kind: log
+    service: notification-service
+    level: WARN
+    template: "GC overhead high: {pct}% of time in garbage collection"
+    start: 2026-10-14T07:35:00Z
+    rate_per_min: 3
+    fields: {pct: {uniform: [35, 80]}}
+  - kind: log
+    service: notification-service
+    level: ERROR
+    template: "container notification-service OOMKilled (memory limit 1Gi); restarting"
+    start: 2026-10-14T07:52:00Z
+    rate_per_min: 0.5
+  - {kind: metric, service: notification-service, metric: consumer_lag, start: 2026-10-14T07:53:00Z, shape: ramp, ramp_minutes: 25, to: 45000}
+  - {kind: metric, service: notification-service, metric: error_rate, start: 2026-10-14T07:53:00Z, to: 0.03, noise: 0.2}

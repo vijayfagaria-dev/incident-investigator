@@ -1,0 +1,16 @@
+id: pir:2026-003
+date: 2026-01-12
+title: notification-service restarts during marketing campaign
+services: [notification-service, kafka]
+symptoms:
+  - notification-service pods OOMKilled and restarting
+  - memory usage climbing steadily before each restart
+  - consumer lag growing
+root_cause:
+  service: notification-service
+  category: capacity_saturation
+summary: >
+  A marketing campaign tripled email volume. Pods ran out of memory buffering outgoing
+  messages and restarted repeatedly.
+resolution: >
+  Raised memory limits and added a third replica for campaigns.
