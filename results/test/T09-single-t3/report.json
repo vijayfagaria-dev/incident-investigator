@@ -1,0 +1,307 @@
+{
+  "incident_id": "T09",
+  "title": "Notification pods restarting",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "notification-service pods began OOMKilling at 07:52 UTC after a deploy at 07:12 UTC introduced an unbounded per‑locale template cache. GC overhead warnings appeared from 07:35 UTC, memory utilization climbed to the 1 GiB limit, and consumer lag and error rates rose as a consequence of repeated restarts. No other config, flag, secret, or infra changes occurred in the window.",
+  "root_cause": {
+    "service": "notification-service",
+    "category": "code_regression",
+    "trigger": "chg:2591"
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "code_regression",
+          "trigger": "chg:2591"
+        },
+        "mechanism": "Unbounded per‑locale template cache introduced in v3.9.2 retains entries indefinitely, causing steady heap growth, high GC overhead, and eventual OOMKill.",
+        "supporting": [
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-9"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-1"
+        ],
+        "predictions": [
+          "Heap dump shows cache objects dominate retained heap",
+          "A cache‑size metric would show monotonic increase"
+        ],
+        "confidence": 0.78,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.78,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "capacity_saturation",
+          "trigger": null
+        },
+        "mechanism": "Higher request rate pushes normal memory usage over the 1 GiB limit.",
+        "supporting": [
+          "OBS-7",
+          "OBS-4"
+        ],
+        "contradicting": [
+          "OBS-2",
+          "OBS-8"
+        ],
+        "assumptions": [
+          "ASM-2"
+        ],
+        "predictions": [],
+        "confidence": 0.12,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.12,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "Kafka consumer lag forces the service to buffer large batches, exhausting memory.",
+        "supporting": [
+          "OBS-5"
+        ],
+        "contradicting": [
+          "OBS-3",
+          "OBS-2"
+        ],
+        "assumptions": [
+          "ASM-3"
+        ],
+        "predictions": [],
+        "confidence": 0.07,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.07,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "infrastructure_failure",
+          "trigger": null
+        },
+        "mechanism": "The 1 GiB memory limit is insufficient for current workload even without a leak.",
+        "supporting": [
+          "OBS-4"
+        ],
+        "contradicting": [
+          "OBS-9",
+          "OBS-8"
+        ],
+        "assumptions": [
+          "ASM-4"
+        ],
+        "predictions": [],
+        "confidence": 0.03,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.03,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "GC overhead high warnings (~35‑37%) appear continuously from 07:35 UTC.",
+      "artifacts": [
+        "log:f681f54530df"
+      ],
+      "service": "notification-service",
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "First OOMKill recorded at 07:52:13 UTC; total 27 OOMKill events until 08:29 UTC.",
+      "artifacts": [
+        "log:c39fab989944"
+      ],
+      "service": "notification-service",
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "Memory utilization climbed from baseline 0.55 to peak 1.00 (1 GiB limit) with mean 0.82.",
+      "artifacts": [
+        "metric:notification-service/mem_util"
+      ],
+      "service": "notification-service",
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "Consumer lag grew from baseline ~129 messages to last 41,370 messages.",
+      "artifacts": [
+        "metric:notification-service/consumer_lag"
+      ],
+      "service": "notification-service",
+      "id": "OBS-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "Request rate increased ~10% from baseline 103 rps to mean 113 rps.",
+      "artifacts": [
+        "metric:notification-service/rps"
+      ],
+      "service": "notification-service",
+      "id": "OBS-7",
+      "source": "investigate"
+    },
+    {
+      "statement": "CPU utilization remained near baseline (0.33 to 0.35).",
+      "artifacts": [
+        "metric:notification-service/cpu_util"
+      ],
+      "service": "notification-service",
+      "id": "OBS-8",
+      "source": "investigate"
+    },
+    {
+      "statement": "Only production change was deploy of notification-service v3.9.2 at 07:12:30 UTC (commit 0f6c3a8) adding per‑locale template cache.",
+      "artifacts": [
+        "chg:2591"
+      ],
+      "service": "notification-service",
+      "id": "OBS-9",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The new per‑locale template cache retains entries indefinitely (no eviction/TTL).",
+      "reason": "Code change adds cache but no bound was mentioned in the diff.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "Memory usage scales roughly linearly with request rate when cache size is bounded.",
+      "reason": "Typical JVM heap behavior for stateless services.",
+      "id": "ASM-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Consumer processes messages in batches whose size is proportional to lag.",
+      "reason": "Kafka consumer default fetch behavior.",
+      "id": "ASM-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "The 1 GiB container memory limit has not been altered recently.",
+      "reason": "No infra change recorded for the service.",
+      "id": "ASM-4",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_logs",
+      "scope": "heap dump / detailed GC logs",
+      "reason": "Tool cannot retrieve heap dumps; needed to confirm cache domination.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "cache size metric (e.g., template_cache_entries)",
+      "reason": "Metric not emitted; would directly show unbounded growth.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Kafka consumer config (max.poll.records, fetch.max.bytes)",
+      "reason": "No record of consumer config changes; needed to rule out H3.",
+      "id": "GAP-3",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Rollback notification-service to v3.9.1 or disable the new per‑locale cache via feature flag.",
+      "rationale": "Stops further memory growth immediately; the deploy is the only recent change.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Temporarily raise pod memory limit to 2 GiB and add restart‑rate alert.",
+      "rationale": "Provides breathing room while the fix is validated; prevents immediate OOMKill cascades.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Implement bounded cache (LRU/TTL, max entries) and ship hot‑fix v3.9.3.",
+      "rationale": "Eliminates the unbounded growth root cause.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add cache‑size metric (template_cache_entries) and GC pause time metric.",
+      "rationale": "Provides observability for future regressions.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Obtain heap dump from a restarted pod to confirm cache objects dominate retained heap.",
+      "rationale": "Closes Gap G1 and validates hypothesis H1.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    }
+  ],
+  "open_questions": [
+    "How many distinct locales were seen during the incident?",
+    "Does the new cache have any eviction/TTL logic that was inadvertently disabled?",
+    "Were there any feature‑flag changes not captured in the change‑history feed?",
+    "What is the Kafka consumer `max.poll.records` setting?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 6,
+    "tool_calls": 4,
+    "tokens": 34500,
+    "elapsed_s": 244.64
+  }
+}

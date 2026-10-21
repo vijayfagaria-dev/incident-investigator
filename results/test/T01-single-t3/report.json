@@ -1,0 +1,272 @@
+{
+  "incident_id": "T01",
+  "title": "Order edits failing",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "A deploy of orders-service v2.15.0 at 13:31 UTC introduced a new order amendment endpoint. Starting at 13:33 UTC the service threw NullPointerExceptions in AmendOrderHandler.validate because order.limitPrice was null, causing 500 responses that propagated to edge-gateway. Error-rate metric spiked while CPU, memory, DB pool and latency stayed normal. No config, flag, secret or infra changes occurred in the window. Root cause is a code regression in the newly added handler.",
+  "root_cause": {
+    "service": "orders-service",
+    "category": "code_regression",
+    "trigger": "chg:2501"
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "code_regression",
+          "trigger": "chg:2501"
+        },
+        "mechanism": "The new amendment handler validates limitPrice by calling compareTo without first checking for null; when a market order (limitPrice=null) is edited, a NullPointerException is thrown, resulting in a 500 that edge-gateway surfaces.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-3",
+          "OBS-4"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "Rolling back to v2.14.3 or adding a null guard will eliminate the NPE and return error_rate to baseline"
+        ],
+        "confidence": 0.96,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.96,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "config_change",
+          "trigger": null
+        },
+        "mechanism": "A configuration change (e.g., feature flag) disabled a default price value causing limitPrice to be null.",
+        "supporting": [],
+        "contradicting": [
+          "OBS-1",
+          "OBS-5"
+        ],
+        "assumptions": [],
+        "predictions": [
+          "A config change entry would appear in change history"
+        ],
+        "confidence": 0.02,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.02,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "market-data-service started returning null prices, causing orders-service to store null limitPrice.",
+        "supporting": [],
+        "contradicting": [
+          "OBS-2",
+          "OBS-5"
+        ],
+        "assumptions": [],
+        "predictions": [
+          "market-data-service logs would show errors or latency spikes"
+        ],
+        "confidence": 0.01,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.01,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "resource_exhaustion",
+          "trigger": null
+        },
+        "mechanism": "Database connection pool saturation caused failures that manifest as NPE.",
+        "supporting": [],
+        "contradicting": [
+          "OBS-5"
+        ],
+        "assumptions": [],
+        "predictions": [
+          "DB pool usage would approach max connections"
+        ],
+        "confidence": 0.01,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.01,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "orders-service v2.15.0 deployed (add order amendment endpoint) at 2026-10-05T13:31:20Z",
+      "artifacts": [
+        "chg:2501"
+      ],
+      "service": "orders-service",
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "orders-service logs show NullPointerException: order.limitPrice is null in AmendOrderHandler.validate (PATCH /v1/orders) – 413 occurrences, first at 13:33:01Z",
+      "artifacts": [
+        "log:0953dd5b47dc"
+      ],
+      "service": "orders-service",
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "edge-gateway logs show upstream orders-service returned 500 on /v1/orders – 379 occurrences, first at 13:34:05Z",
+      "artifacts": [
+        "log:a41f996d606e"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "orders-service error_rate metric rose from baseline 0.0021 to peak 0.0663 (mean 0.0185) between 13:31‑13:58Z",
+      "artifacts": [
+        "metric:orders-service/error_rate"
+      ],
+      "service": "orders-service",
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "orders-service CPU, memory, DB pool usage, latency_p99 and RPS remained within normal bounds during the same window",
+      "artifacts": [
+        "metric:orders-service/cpu_util",
+        "metric:orders-service/mem_util",
+        "metric:orders-service/db_pool_in_use",
+        "metric:orders-service/latency_p99_ms",
+        "metric:orders-service/rps"
+      ],
+      "service": "orders-service",
+      "id": "OBS-5",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "Customer edit action maps to PATCH /v1/orders (the amendment endpoint added in v2.15.0)",
+      "reason": "Reported symptom is “changing price or quantity of an open order” and the new endpoint handles amendments",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "An order can legitimately have limitPrice == null (e.g., market orders) and the new validation omitted a null check",
+      "reason": "Exception shows direct dereference of limitPrice without guard; market orders lack a limit price",
+      "id": "ASM-2",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "get_change_history",
+      "scope": "Full diff of commit e4a91c2 (orders-service v2.15.0) to confirm missing null check",
+      "reason": "Source code diffs are not accessible via available tooling",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "market-data-service logs 13:30‑13:58 UTC",
+      "reason": "Not queried; low priority given high confidence in H1",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "Request payloads for PATCH /v1/orders during incident",
+      "reason": "Tooling does not capture request bodies",
+      "id": "GAP-3",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Rollback orders-service to v2.14.3 or deploy hot‑fix adding null guard in AmendOrderHandler.validate",
+      "rationale": "Immediately stops the NPE and restores edit functionality",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Add defensive check `if (order.limitPrice == null) return errorResponse` before compareTo in the amendment handler",
+      "rationale": "Permanent code fix for the regression",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add unit/integration test covering PATCH /v1/orders with missing limitPrice (market order)",
+      "rationale": "Prevents regression of same null‑check omission",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Update code‑review checklist to require null checks on optional fields for new endpoints",
+      "rationale": "Process improvement to catch similar bugs early",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Enable structured error code for “missing limit price” and add alert on its occurrence",
+      "rationale": "Improves observability for future incidents",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Exact diff of commit e4a91c2 – does it contain any other changes affecting order editing?",
+    "What is the full customer impact scope (only price/qty edits or any PATCH payload)?",
+    "Why did pre‑prod testing not catch the missing null check (missing market‑order test case)?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 7,
+    "tool_calls": 5,
+    "tokens": 43914,
+    "elapsed_s": 237.75
+  }
+}

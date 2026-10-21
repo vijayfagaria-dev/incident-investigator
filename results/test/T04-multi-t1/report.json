@@ -1,0 +1,510 @@
+{
+  "incident_id": "T04",
+  "title": "Some order placements failing",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "A feature‑flag rollout of the new_pricing_path flag to 20 % of accounts at 15:22 UTC introduced a non‑terminating decimal arithmetic bug in PricingPathV2.applyCollar, which threw ArithmeticException for flag‑enabled accounts. The exception propagated uncaught, causing orders‑service to return 5xx errors for roughly one‑fifth of order attempts from 15:23 to 15:50 UTC. The critic accepted this hypothesis (confidence 0.86) and rejected the market‑data and auth alternatives. The root cause is identified, but per‑account flag state at request time was not captured in logs, and several observability gaps remain.",
+  "root_cause": {
+    "service": "orders-service",
+    "category": "code_regression",
+    "trigger": "chg:2534"
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "code_regression",
+          "trigger": "chg:2534"
+        },
+        "mechanism": "The feature‑flag rollout of new_pricing_path to 20 % of accounts activates a new pricing code path (PricingPathV2). That path contains a non‑terminating decimal arithmetic bug that throws ArithmeticException in applyCollar. The exception propagates uncaught, causing orders‑service to return 5xx for every request from flag‑enabled accounts, which appear as upstream‑500 errors in edge‑gateway.",
+        "supporting": [
+          "OBS-2",
+          "OBS-12",
+          "OBS-13",
+          "OBS-7",
+          "OBS-9",
+          "OBS-14"
+        ],
+        "contradicting": [
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-10",
+          "OBS-11",
+          "OBS-6"
+        ],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2",
+          "ASM-3"
+        ],
+        "predictions": [
+          "Error rate on POST /v1/orders should be ~0 for accounts with flag disabled and >0 for flag enabled.",
+          "No increase in gRPC error rate or latency from orders‑service → market‑data‑service during the incident.",
+          "Disabling the flag (rolling back to 0 %) should immediately stop the 5xx errors."
+        ],
+        "confidence": 0.86,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.86,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": "accept",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "The hypothesis predicts errors only for the 20 % of accounts with the flag enabled, but per‑account flag state at request time is not captured in current logs or metrics (GAP‑10). This gap does not block acceptance because three other evidence kinds already converge.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "An external quotes‑vendor began rate‑limiting (429) and returning 503 responses around 14:35‑14:44. Market‑data‑service forwards these failures to its callers. Because orders‑service has a hard gRPC dependency (500 ms timeout) on market‑data‑service, the vendor degradation leaks through as gRPC errors or timeouts, causing orders‑service to return 5xx for a subset of requests.",
+        "supporting": [
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-10",
+          "OBS-11",
+          "OBS-15",
+          "OBS-16",
+          "OBS-18"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-7",
+          "OBS-9"
+        ],
+        "assumptions": [
+          "ASM-4",
+          "ASM-5"
+        ],
+        "predictions": [
+          "Orders‑service gRPC client metrics should show a spike in error rate / latency to market‑data‑service coincident with the 15:23‑15:50 symptom window.",
+          "The 5xx errors should be distributed across all accounts, not limited to the 20 % flag cohort.",
+          "Vendor‑side metrics (if available) would show sustained elevated error rate after 14:44."
+        ],
+        "confidence": 0.18,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.18,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Market‑data service metrics show no degradation during the symptom window (OBS‑6), directly contradicting the claim that vendor rate‑limiting leaked through as gRPC errors.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "auth-service",
+          "category": "config_change",
+          "trigger": "chg:2536"
+        },
+        "mechanism": "The token refresh grace period was reduced from 120 s to 90 s at 15:05. Clients whose tokens were near expiry would start receiving auth failures (401/403) when placing orders, manifesting as generic errors for a subset of users.",
+        "supporting": [
+          "OBS-1"
+        ],
+        "contradicting": [
+          "OBS-7",
+          "OBS-9",
+          "OBS-14"
+        ],
+        "assumptions": [
+          "ASM-6"
+        ],
+        "predictions": [
+          "Gateway and orders‑service logs would contain 401/403 responses for failing requests.",
+          "Failure rate would correlate with token age distribution, not with the feature‑flag rollout."
+        ],
+        "confidence": 0.04,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.04,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Observed failures are 5xx with ArithmeticExceptions, not 401/403 auth errors; the hypothesis does not account for this mismatch.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "config on auth-service at 15:05:40 UTC by config-bot: Lower token refresh grace period (token.refresh_grace_s: 120 -> 90)",
+      "artifacts": [
+        "chg:2536"
+      ],
+      "service": "auth-service",
+      "id": "OBS-1",
+      "source": "change-census"
+    },
+    {
+      "statement": "feature_flag on orders-service at 15:22:07 UTC by lena.fischer: Roll out new_pricing_path to 20% of accounts (flag: new_pricing_path, rollout: 0% -> 20%)",
+      "artifacts": [
+        "chg:2534"
+      ],
+      "service": "orders-service",
+      "id": "OBS-2",
+      "source": "change-census"
+    },
+    {
+      "statement": "market-data-service logged 6 WARN events “quotes‑vendor responded 429; backing off <ms>ms” from 2026‑10‑08T14:42:13.873Z to 2026‑10‑08T15:46:30.422Z",
+      "artifacts": [
+        "log:706d3b8ae4bd"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-3",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "market-data-service logged 3 ERROR events “GET /v1/quotes 503 12ms” between 2026‑10‑08T14:35:59.250Z and 2026‑10‑08T14:44:50.789Z",
+      "artifacts": [
+        "log:6f5ff0cc8b59"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-4",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "market-data-service vendor_error_rate averaged 0.00106 (baseline 0.00093) with a peak of 0.00220 during the window",
+      "artifacts": [
+        "metric:market-data-service/vendor_error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-5",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "market-data-service latency_p99_ms and error_rate remained essentially at baseline (p99 ≈ 257 ms vs 256 ms baseline; error_rate ≈ 0.00196 vs 0.00195 baseline)",
+      "artifacts": [
+        "metric:market-data-service/latency_p99_ms",
+        "metric:market-data-service/error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-6",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "orders‑service logs an ArithmeticException in PricingPathV2.applyCollar 340 times, first at 2026‑10‑08T15:23:00.702Z and last at 2026‑10‑08T15:49:57.995Z",
+      "artifacts": [
+        "log:e56c11822899"
+      ],
+      "service": "orders-service",
+      "id": "OBS-7",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "edge‑gateway records 312 upstream‑500 warnings for POST /v1/orders from 15:23:05.719Z to 15:49:48.906Z",
+      "artifacts": [
+        "log:209f37015f90"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-9",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "market‑data‑service logs 6 vendor 429‑rate‑limit warnings between 14:42:13.873Z and 15:46:30.422Z",
+      "artifacts": [
+        "log:706d3b8ae4bd"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-10",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "market‑data‑service logs 3 HTTP 503 errors on GET /v1/quotes early in the window (14:35:59‑14:44:50)",
+      "artifacts": [
+        "log:6f5ff0cc8b59"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-11",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "A feature‑flag rollout on orders‑service changed new_pricing_path from 0% to 20% at 2026‑10‑08T15:22:07Z.",
+      "artifacts": [
+        "chg:2534"
+      ],
+      "service": "orders-service",
+      "id": "OBS-12",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "The flag rollout occurred before the first symptom onset (~15:25 UTC), making it a plausible cause.",
+      "artifacts": [
+        "chg:2534"
+      ],
+      "service": "orders-service",
+      "id": "OBS-13",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "No other config changes, feature‑flag toggles, secret rotations, or infra work were recorded for edge‑gateway, market‑data‑service, quotes‑vendor, postgres‑orders, or redis‑cache in the 14:35‑15:50 UTC window.",
+      "artifacts": [
+        "chg:2534"
+      ],
+      "service": null,
+      "id": "OBS-14",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "orders‑service has a hard gRPC dependency on market‑data‑service (500 ms timeout) and a hard SQL dependency on postgres‑orders (2 s timeout).",
+      "artifacts": [
+        "dep:orders-service->market-data-service",
+        "dep:orders-service->postgres-orders"
+      ],
+      "service": "orders-service",
+      "id": "OBS-15",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "market‑data‑service has a hard HTTPS dependency on quotes‑vendor (800 ms timeout).",
+      "artifacts": [
+        "dep:market-data-service->quotes-vendor"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-16",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "Change census shows zero changes for quotes‑vendor and market‑data‑service in the 14:30‑15:00 UTC window.",
+      "artifacts": [
+        "chg:2534"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-18",
+      "source": "r1-dependency-4"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "ArithmeticException is thrown only for requests that execute the new pricing code path (i.e., accounts with new_pricing_path flag enabled).",
+      "reason": "The exception stack trace points to PricingPathV2.applyCollar, which is only invoked when the flag is on.",
+      "id": "ASM-1",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The feature‑flag rollout is per‑account and remains stable for the duration of the incident (no mid‑window toggles).",
+      "reason": "Change census records a single rollout event at 15:22:07 with no subsequent changes.",
+      "id": "ASM-2",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The generic 5xx observed by edge‑gateway is the direct HTTP translation of the uncaught ArithmeticException in orders‑service.",
+      "reason": "Edge‑gateway logs show upstream‑500 for POST /v1/orders exactly matching the time range of the exceptions.",
+      "id": "ASM-3",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The vendor 429/503 bursts were short‑lived and fully absorbed by market‑data‑service’s cache/back‑off logic, leaving no residual error surface.",
+      "reason": "Market‑data‑service latency and error rate metrics stayed at baseline (OBS‑6).",
+      "id": "ASM-4",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The new pricing path does not increase the call‑rate to market‑data‑service enough to saturate the vendor quota.",
+      "reason": "No evidence of increased gRPC traffic; the flag only changes pricing arithmetic.",
+      "id": "ASM-5",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The generic order‑placement error reported by customers is not an auth error (no 401/403 observed in any log).",
+      "reason": "All observed errors are 5xx/ArithmeticException; auth‑related codes are absent.",
+      "id": "ASM-6",
+      "source": "r1-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_logs",
+      "scope": "quotes-vendor logs at INFO/DEBUG level for payload inspection",
+      "reason": "Only WARN/ERROR patterns were queried; lower‑severity logs may contain evidence of malformed or stale price messages.",
+      "id": "GAP-1",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "quotes-vendor metrics (error_rate, latency_p99, response_code distribution)",
+      "reason": "No metrics were fetched for quotes-vendor, so we cannot see its health or rate‑limit behavior directly.",
+      "id": "GAP-2",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "market-data-service logs mentioning cache refresh, price validation, or stale‑price detection",
+      "reason": "Current log patterns show only 429 back‑off and 503 errors; no visibility into whether bad prices were cached and served.",
+      "id": "GAP-3",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "orders‑service latency, error rate, CPU, memory, thread‑pool saturation",
+      "reason": "Metrics not queried; needed to see if orders‑service itself saturated before 15:23.",
+      "id": "GAP-4",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "postgres‑orders SQL error / timeout logs",
+      "reason": "Postgres‑orders service logs not retrieved; could reveal DB‑side failures.",
+      "id": "GAP-5",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "market‑data‑service gRPC call latency and error rate",
+      "reason": "No metric data fetched for the downstream market‑data dependency.",
+      "id": "GAP-6",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "edge‑gateway upstream latency / error counters",
+      "reason": "Missing gateway‑side metrics to correlate 5xx volume with upstream latency.",
+      "id": "GAP-7",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Implementation details of the new_pricing_path flag (code path, config values, validation logic)",
+      "reason": "Change census only records flag rollout, not the underlying code or config changes.",
+      "id": "GAP-8",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_service_dependencies",
+      "scope": "Distributed traces for failing POST /v1/orders requests to pinpoint whether failure originates in orders‑service validation, market‑data‑service price fetch, or quotes‑vendor call",
+      "reason": "Dependency tool provides topology but not request‑level trace data.",
+      "id": "GAP-9",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Per‑account feature‑flag state at request time",
+      "reason": "No metric linking individual customer accounts to the flag rollout is captured in the change log.",
+      "id": "GAP-10",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "quotes-vendor (external)",
+      "reason": "External vendor changes are not recorded in internal change census; cannot confirm or rule out vendor‑side rate‑limit config changes.",
+      "id": "GAP-11",
+      "source": "r1-dependency-4"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "market-data-service dynamic/runtime config (e.g., Consul/etcd keys, feature‑flag values read at start‑up)",
+      "reason": "Change census only captures explicit config‑change events; runtime config shifts would not appear.",
+      "id": "GAP-12",
+      "source": "r1-dependency-4"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "market-data-service prior deploys (before 14:30 UTC) that may have altered hard‑coded rate‑limit or cache‑TTL constants",
+      "reason": "A prior deploy could have introduced a latent behavior that only manifests under current load; not covered by the 14:30‑15:00 window query.",
+      "id": "GAP-13",
+      "source": "r1-dependency-4"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Roll back the new_pricing_path flag to 0 % rollout immediately.",
+      "rationale": "Disabling the flag stops the faulty code path and eliminates the 5xx errors for affected customers.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Patch the arithmetic bug in PricingPathV2.applyCollar (handle non‑terminating decimals safely) and deploy the fix.",
+      "rationale": "Removes the underlying defect so the new pricing path can be re‑enabled safely.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add unit and integration tests covering the collar calculation with edge‑case decimal values; enforce canary rollout with automated error‑rate alerts for future flag changes.",
+      "rationale": "Prevents regression of similar arithmetic bugs and catches them before wide exposure.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Correlate per‑account flag state with request outcomes by instrumenting the flag evaluation in logs/metrics.",
+      "rationale": "Closes GAP‑10 (no per‑account flag visibility) and validates the 20 % error distribution assumption.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Collect quotes‑vendor metrics (error_rate, latency_p99, response‑code distribution) for the incident window.",
+      "rationale": "Addresses GAP‑2 and GAP‑11 to definitively rule out any vendor‑side contribution.",
+      "hypothesis_id": "HYP-2",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Enable distributed tracing for POST /v1/orders to pinpoint failure origin (orders‑service vs market‑data‑service vs quotes‑vendor).",
+      "rationale": "Closes GAP‑9 and provides end‑to‑end visibility for future incidents.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "What is the exact per‑account flag state at request time (GAP‑10)?",
+    "What were the quotes‑vendor health metrics during 14:30‑15:50 UTC (GAP‑2, GAP‑11)?",
+    "Do lower‑severity vendor logs show malformed or stale price payloads (GAP‑1)?",
+    "Did market‑data‑service cache or serve any bad prices (GAP‑3)?",
+    "Were there any orders‑service resource saturation signals before 15:23 (GAP‑4)?",
+    "Did postgres‑orders log any SQL errors or timeouts (GAP‑5)?",
+    "What are the gRPC latency/error metrics for the orders‑service → market‑data‑service call (GAP‑6)?",
+    "What do edge‑gateway upstream latency/error counters show (GAP‑7)?",
+    "What are the implementation details and validation logic of the new_pricing_path flag (GAP‑8)?",
+    "Are there any runtime config changes in market‑data‑service not captured by the change census (GAP‑12)?",
+    "Could a prior deploy before 14:30 have introduced latent behavior (GAP‑13)?"
+  ],
+  "termination": "the critic accepted HYP-1",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 23,
+    "tool_calls": 11,
+    "tokens": 93066,
+    "elapsed_s": 606.41
+  }
+}

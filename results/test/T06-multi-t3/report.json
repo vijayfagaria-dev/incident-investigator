@@ -1,0 +1,627 @@
+{
+  "incident_id": "T06",
+  "title": "Intermittent errors across the app",
+  "outcome": "inconclusive",
+  "outcome_reasons": [
+    "HYP-1 has unresolved blocking objections"
+  ],
+  "summary": "Intermittent ~2% request failures began around 11:15 UTC after the orders‑service v2.16.0 deploy at 11:05 UTC. The leading hypothesis (HYP‑1) is that the new batched fee‑schedule lookup lengthens a DB transaction enough to hit an idle‑in‑transaction or lock‑wait timeout, causing PostgreSQL to close the connection and surface as “connection reset by peer” errors. However, the investigation stopped after two rounds because HYP‑1 has a blocking objection: no metric shows the transaction duration or connection‑reset counters, and the exact code diff for the deploy is unavailable. Other hypotheses (PostgreSQL hiccup, feature‑flag rollout, pool‑config change) were rejected or remain unruled‑out. The root cause remains inconclusive.",
+  "root_cause": null,
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "code_regression",
+          "trigger": "chg:2561"
+        },
+        "mechanism": "The v2.16.0 deploy introduced a batched fee‑schedule lookup that runs a larger/longer DB transaction. In a small fraction of calls the transaction exceeds PostgreSQL's idle‑in‑transaction timeout (or hits a lock‑wait timeout), so the server closes the connection → client logs “connection … reset by peer”. Errors bubble up through the hard HTTP edge‑gateway, producing ~2 % 5xx seen by customers.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-12",
+          "OBS-16"
+        ],
+        "contradicting": [
+          "OBS-7",
+          "OBS-8",
+          "OBS-20",
+          "OBS-21",
+          "OBS-22"
+        ],
+        "assumptions": [
+          "ASM-7",
+          "ASM-8"
+        ],
+        "predictions": [
+          "PostgreSQL metrics will show a spike in connection‑reset/abort errors at ~11:15",
+          "Orders‑service DB query latency for fee‑schedule tables will increase after 11:05"
+        ],
+        "confidence": 0.78,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.5,
+      "calibration": [
+        "it has unresolved blocking objections"
+      ],
+      "confidence_band": "medium",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "The claim that the batched lookup lengthens a DB transaction enough to hit an idle‑in‑transaction or lock‑wait timeout is not backed by any metric (transaction duration, lock wait, or connection‑reset counters).",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "HYP‑2 (postgres transient hiccup), HYP‑3 (feature‑flag rollout), and HYP‑4 (pool‑config change) have not been ruled out by the current evidence. (not blocking: this review rejected HYP-2 or found it flawed)",
+          "alternative": "HYP-2",
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "The exact source diff for commit 8b20f4e (v2.16.0) and Postgres connection‑reset/abort counters are not available via the current toolset, leaving a key mechanistic gap.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "postgres-orders",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "A transient network/OS hiccup on the PostgreSQL host (e.g., NIC reset, firewall reload, conntrack overflow) began ~11:15, causing the server to abort existing client sockets. Orders‑service logs the peer‑reset; its error‑rate climbs; edge‑gateway sees the downstream failures via its hard dependency.",
+        "supporting": [
+          "OBS-4",
+          "OBS-5",
+          "OBS-9",
+          "OBS-12",
+          "OBS-16"
+        ],
+        "contradicting": [
+          "OBS-15",
+          "OBS-7",
+          "OBS-8",
+          "OBS-20",
+          "OBS-21",
+          "OBS-22",
+          "OBS-23",
+          "OBS-24",
+          "OBS-25"
+        ],
+        "assumptions": [
+          "ASM-9",
+          "ASM-10"
+        ],
+        "predictions": [
+          "PostgreSQL metrics will show increased aborted connections or latency at 11:15",
+          "No code change in orders‑service correlates with the exact 11:15 start"
+        ],
+        "confidence": 0.14,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.14,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "temporal_violation",
+          "severity": "blocking",
+          "detail": "Orders‑service error rate rises at 11:14, before the first peer‑reset log at 11:15:13, so the putative Postgres hiccup cannot be the initial cause.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Postgres‑orders metrics (query latency, active connections, CPU, replication lag) show no degradation at 11:15, contradicting a server‑side network/OS hiccup.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "feature_flag",
+          "trigger": "chg:2561"
+        },
+        "mechanism": "The deploy toggles a feature flag that enables the new batched fee‑schedule path for only a slice of traffic (~2 %). Those requests hit a bug (e.g., missing retry on cache‑miss) → “fee cache cold” logs and intermittent failures; retries succeed because the flag is evaluated per‑request.",
+        "supporting": [
+          "OBS-3",
+          "OBS-5",
+          "OBS-16"
+        ],
+        "contradicting": [
+          "OBS-15",
+          "OBS-4",
+          "OBS-7",
+          "OBS-8"
+        ],
+        "assumptions": [
+          "ASM-11",
+          "ASM-12"
+        ],
+        "predictions": [
+          "Feature‑flag audit will show a flag flipped at 11:05 controlling the batch lookup",
+          "Error rate will correlate with the flagged traffic fraction (~2 %)"
+        ],
+        "confidence": 0.06,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.06,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "No feature‑flag change is recorded in the change history for the deploy window; the hypothesis assumes a flag flip that is not observed.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "HYP‑1 (code regression) also explains the “fee cache cold” logs and error pattern and has not been excluded. (not blocking: this review rejected HYP-1 or found it flawed)",
+          "alternative": "HYP-1",
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "A feature‑flag audit for orders‑service around 11:05 is not obtainable from the available change‑history endpoint.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "config_change",
+          "trigger": "chg:2561"
+        },
+        "mechanism": "The new binary ships a different default for the connection‑pool configuration (e.g., shorter maxLifetime or idle_timeout). Connections that survive longer than the new limit are closed by the pool, and the client interprets the closure as “reset by peer”.",
+        "supporting": [
+          "OBS-4",
+          "OBS-5",
+          "OBS-12"
+        ],
+        "contradicting": [
+          "OBS-15",
+          "OBS-7"
+        ],
+        "assumptions": [
+          "ASM-13"
+        ],
+        "predictions": [
+          "Diff will reveal a change to pool defaults (maxLifetime, idleTimeout) in v2.16.0"
+        ],
+        "confidence": 0.02,
+        "version": 1,
+        "round": 2
+      },
+      "confidence": 0.02,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-4",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "The hypothesis posits a pool‑configuration change in v2.16.0, but the change census shows only a code diff; no config change is recorded.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-4",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "DB pool size and in‑use connections remain constant and well below limits, providing no evidence that a new pool limit is being hit.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "deploy on orders-service at 11:05:12 UTC by ci/deploy-bot: orders-service v2.16.0: batch fee schedule lookups (version: 2.16.0, previous_version: 2.15.2, commit: 8b20f4e, diff: +142 / -97)",
+      "artifacts": [
+        "chg:2561"
+      ],
+      "service": "orders-service",
+      "id": "OBS-1",
+      "source": "change-census"
+    },
+    {
+      "statement": "orders-service v2.16.0 was deployed at 11:05:12 UTC.",
+      "artifacts": [
+        "chg:2561"
+      ],
+      "service": "orders-service",
+      "id": "OBS-2",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "WARN log “fee cache cold; fetching <n> fee schedules” appears 36 times, first at 11:06:22 and last at 11:18:41.",
+      "artifacts": [
+        "log:e91658633ca4"
+      ],
+      "service": "orders-service",
+      "id": "OBS-3",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "WARN log “connection to postgres-orders reset by peer; retrying” appears 203 times, first at 11:15:13 and last at 11:49:45.",
+      "artifacts": [
+        "log:a32c4ff0bfc1"
+      ],
+      "service": "orders-service",
+      "id": "OBS-4",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "Error‑rate metric (baseline 0.001883) rises from 0.0018 at 11:00 to 0.0040 at 11:14, then climbs to a peak of 0.01024 at 11:36, averaging 0.0060 over the window.",
+      "artifacts": [
+        "metric:orders-service/error_rate"
+      ],
+      "service": "orders-service",
+      "id": "OBS-5",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "DB pool in‑use mean 17.2 connections (baseline 16.5), max 20.97; pool size constant at 40.",
+      "artifacts": [
+        "metric:orders-service/db_pool_in_use",
+        "metric:orders-service/db_pool_max_connections"
+      ],
+      "service": "orders-service",
+      "id": "OBS-7",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "CPU, memory, RPS remain within baseline ranges (CPU mean 0.475 vs 0.452 baseline; mem mean 0.553 vs 0.550; rps mean 149.6 vs 140 baseline).",
+      "artifacts": [
+        "metric:orders-service/cpu_util",
+        "metric:orders-service/mem_util",
+        "metric:orders-service/rps"
+      ],
+      "service": "orders-service",
+      "id": "OBS-8",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "edge‑gateway error_rate baseline_mean is 0.002036 (≈0.2 %). From 11:15 UTC onward the 3‑minute points rise to 0.018‑0.023 (≈1.8‑2.3 %).",
+      "artifacts": [
+        "metric:edge-gateway/error_rate"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-9",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "edge‑gateway calls orders‑service via a hard HTTP dependency (timeout 3 s).",
+      "artifacts": [
+        "dep:edge-gateway->orders-service"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-12",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "No config changes, feature‑flag flips, secret rotations, or infra work were recorded for any other listed service or shared infrastructure in the window.",
+      "artifacts": [
+        "chg:2561"
+      ],
+      "service": null,
+      "id": "OBS-15",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "Symptom pattern (~2 % request failures, retries succeed, minimal latency/error graph movement) matches a transient failure in a single downstream service (orders‑service) affecting only traffic that reaches it.",
+      "artifacts": [
+        "chg:2561",
+        "dep:edge-gateway->orders-service"
+      ],
+      "service": null,
+      "id": "OBS-16",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "payments‑service error_rate baseline_mean 0.002066; observed mean 0.002038, first 0.001741 at 10:30, last 0.001234 at 11:50 – no increase at 11:15.",
+      "artifacts": [
+        "metric:payments-service/error_rate"
+      ],
+      "service": "payments-service",
+      "id": "OBS-20",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "payments‑service latency_p99_ms baseline_mean 468.9 ms; observed mean 465.3 ms, stable across window. bank_rails_latency_p99_ms baseline_mean 417.4 ms; observed mean 424.3 ms, also stable.",
+      "artifacts": [
+        "metric:payments-service/latency_p99_ms",
+        "metric:payments-service/bank_rails_latency_p99_ms"
+      ],
+      "service": "payments-service",
+      "id": "OBS-21",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "postgres-orders query_latency_p99_ms mean 17.53 ms (baseline 17.7 ms), max 21.11 ms, min 13.34 ms over 11:10‑11:40; no spike at 11:15.",
+      "artifacts": [
+        "metric:postgres-orders/query_latency_p99_ms"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-22",
+      "source": "r2-observability-5"
+    },
+    {
+      "statement": "postgres-orders active_connections mean 87.2 connections (baseline 84.8), range 69.5‑99.9; modest increase but well below pool limits.",
+      "artifacts": [
+        "metric:postgres-orders/active_connections"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-23",
+      "source": "r2-observability-5"
+    },
+    {
+      "statement": "postgres-orders cpu_util mean 0.400 (baseline 0.386), range 0.33‑0.50; slight elevation, not indicative of saturation.",
+      "artifacts": [
+        "metric:postgres-orders/cpu_util"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-24",
+      "source": "r2-observability-5"
+    },
+    {
+      "statement": "postgres-orders replication_lag_s mean 0.372 s (baseline 0.419 s), range 0.123‑0.585 s; replication lag improved relative to baseline.",
+      "artifacts": [
+        "metric:postgres-orders/replication_lag_s"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-25",
+      "source": "r2-observability-5"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The batched fee‑schedule lookup lengthens the DB transaction (holds a connection longer).",
+      "reason": "Inferred from the change summary “batch fee schedule lookups” and the subsequent peer‑reset logs; no diff available (GAP‑3).",
+      "id": "ASM-7",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "PostgreSQL is configured with an idle‑in‑transaction timeout that can be hit by the longer transaction.",
+      "reason": "Typical managed‑Postgres defaults include a 30‑60 s idle‑in‑transaction timeout; no evidence to the contrary.",
+      "id": "ASM-8",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "A non‑instrumented network event can reset TCP sockets without showing up in PostgreSQL metrics.",
+      "reason": "Network‑level resets (e.g., NIC driver reset) are invisible to DB‑level metrics.",
+      "id": "ASM-9",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The event is short‑lived, so 1‑minute sampled metrics miss it.",
+      "reason": "Metrics resolution may smooth out a sub‑minute spike.",
+      "id": "ASM-10",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "A feature flag was flipped silently during the deploy.",
+      "reason": "Change log shows no flag change (OBS‑15), but flag flips are sometimes not emitted as separate records (GAP‑4).",
+      "id": "ASM-11",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The flagged path is exercised by ~2 % of requests.",
+      "reason": "Matches the observed ~2 % error rate and retry‑success pattern.",
+      "id": "ASM-12",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The deploy bundles a library upgrade that changes pool defaults.",
+      "reason": "Speculative; no diff or config change recorded (GAP‑10).",
+      "id": "ASM-13",
+      "source": "r2-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_metrics",
+      "scope": "Kafka consumer lag for orders-service",
+      "reason": "Metric not exposed / not returned in the metrics summary; needed to assess downstream back‑pressure.",
+      "id": "GAP-1",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "error_rate, latency_p99, rps for orders-service, market-data-service, payments-service, portfolio-service, quotes-vendor, postgres-orders, postgres-payments, bank-rails, redis-cache",
+      "reason": "Step budget exhausted; need per‑service error/latency series to locate the first hop after edge‑gateway.",
+      "id": "GAP-2",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "orders-service v2.16.0 code diff",
+      "reason": "The change census only provides a line‑count summary (+142/‑97). The exact code change to “batch fee schedule lookups” is needed to assess race conditions, cache‑miss fallbacks, or DB‑lock contention.",
+      "id": "GAP-3",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Feature‑flag or config toggles applied during the orders‑service deploy",
+      "reason": "Flags flipped as part of a deploy are not always emitted as separate change records; a flag could enable the new batch path for only a subset of traffic, matching the 2 % error rate.",
+      "id": "GAP-4",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_service_dependencies",
+      "scope": "Edge‑gateway request routing / fan‑out logic",
+      "reason": "If a single client request fans out to both orders‑service and portfolio‑service, a failure in orders‑service could be counted as a failure for the portfolio screen, inflating the apparent error surface.",
+      "id": "GAP-5",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Client‑side error classification (server 5xx vs client timeout/network error)",
+      "reason": "Responder notes suggest a possible client‑side cause; confirming the error class would focus the investigation on the correct tier.",
+      "id": "GAP-6",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "portfolio-service, quotes-vendor, postgres-orders, postgres-payments, bank-rails, redis-cache, kafka",
+      "reason": "Step limit reached; unable to fetch error‑rate and latency metrics for the remaining downstream services.",
+      "id": "GAP-7",
+      "source": "r1-observability-4"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "portfolio-service, quotes-vendor, postgres-orders, postgres-payments, bank-rails, redis-cache, kafka",
+      "reason": "Step limit reached; unable to inspect WARN/ERROR log patterns for the remaining downstream services.",
+      "id": "GAP-8",
+      "source": "r1-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "postgres-orders connection reset / aborted connection counters",
+      "reason": "The metric catalog for postgres-orders does not expose connection‑reset or aborted‑connection counters, so the requested REQ‑4 counters cannot be retrieved.",
+      "id": "GAP-9",
+      "source": "r2-observability-5"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "commit 8b20f4e diff",
+      "reason": "The change‑history endpoint only returns a line‑count summary (+142 / -97) and does not provide the actual source diff needed to verify whether the batched lookup lengthens DB transactions.",
+      "id": "GAP-10",
+      "source": "r2-dependency-6"
+    },
+    {
+      "tool": "metrics query (not available)",
+      "scope": "orders-service DB transaction latency / active transaction count",
+      "reason": "No transaction‑level metrics (e.g., db_txn_duration_ms, db_txn_active_count) were supplied, so we cannot directly observe a change in transaction length after the deploy.",
+      "id": "GAP-11",
+      "source": "r2-dependency-6"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Roll back orders‑service to v2.15.2 to stop the error spike while the root cause is clarified.",
+      "rationale": "The deploy at 11:05 UTC is the only change correlated with the symptom onset; rolling back removes the suspect code path immediately.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Retrieve the full source diff for commit 8b20f4e (orders‑service v2.16.0) to verify whether the batched fee‑schedule lookup introduces a larger/longer DB transaction.",
+      "rationale": "The blocking objection on HYP‑1 cites the missing code diff; the diff is needed to confirm or refute the transaction‑length mechanism.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Enable and collect PostgreSQL connection‑reset / aborted‑connection counters (e.g., pg_stat_database_conflicts, pg_stat_activity state changes) for the postgres‑orders instance covering 11:10‑11:40 UTC.",
+      "rationale": "HYP‑1 predicts a spike in connection‑reset errors; the current metric catalog lacks these counters (GAP‑9).",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Add DB‑transaction‑level metrics (transaction duration, active transaction count) to orders‑service and PostgreSQL dashboards.",
+      "rationale": "Gap‑11 notes no transaction‑latency metrics exist; they are required to observe whether the new code path lengthens transactions.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Audit feature‑flag state for orders‑service at the time of the deploy to determine whether a flag enabling the batched lookup was flipped for a subset of traffic.",
+      "rationale": "HYP‑3 assumes a flag flip (~2% traffic) but no flag change is recorded; the audit will confirm or exclude this path.",
+      "hypothesis_id": "HYP-3",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Verify whether any connection‑pool configuration (maxLifetime, idleTimeout) changed in v2.16.0 by reviewing the full diff and runtime config.",
+      "rationale": "HYP‑4 posits a pool‑config change, but the change census shows only code changes; confirming the config eliminates this hypothesis.",
+      "hypothesis_id": "HYP-4",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Implement automated canary analysis with error‑rate and latency guards for all service deployments.",
+      "rationale": "A canary would have detected the ~2% error rise early and prevented a full rollout of a regressing version.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add alerts for PostgreSQL idle‑in‑transaction timeouts, lock‑wait timeouts, and connection‑reset counters.",
+      "rationale": "Direct visibility into the conditions HYP‑1 describes would surface similar issues instantly.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    },
+    {
+      "kind": "fix",
+      "description": "If the batched fee‑schedule lookup is confirmed to cause long transactions, refactor it to use smaller batches or asynchronous processing.",
+      "rationale": "Removes the mechanistic cause identified in HYP‑1 and prevents recurrence.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "What is the exact code change in commit 8b20f4e (the batched fee‑schedule lookup implementation)?",
+    "Do orders‑service DB transactions after the deploy exceed PostgreSQL's idle‑in‑transaction or lock‑wait timeout thresholds?",
+    "What are the PostgreSQL connection‑reset / aborted‑connection counters during 11:10‑11:40 UTC?",
+    "Was a feature flag toggled as part of the v2.16.0 rollout that enables the new lookup for only a fraction of traffic?",
+    "Did the connection‑pool configuration (maxLifetime, idleTimeout) change in the new binary?",
+    "Are the observed client errors server‑side 5xx or client‑side timeouts/network errors?",
+    "What is the Kafka consumer lag for orders‑service during the incident window (possible back‑pressure)?"
+  ],
+  "termination": "reached the limit of 2 rounds",
+  "stats": {
+    "rounds": 2,
+    "model_calls": 34,
+    "tool_calls": 16,
+    "tokens": 169922,
+    "elapsed_s": 882.46
+  }
+}

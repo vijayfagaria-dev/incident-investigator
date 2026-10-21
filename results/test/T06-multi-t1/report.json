@@ -1,0 +1,707 @@
+{
+  "incident_id": "T06",
+  "title": "Intermittent errors across the app",
+  "outcome": "inconclusive",
+  "outcome_reasons": [
+    "HYP-2 has unresolved blocking objections"
+  ],
+  "summary": "Starting around 10:35 UTC the external quotes‑vendor began returning 429/503 responses, which propagated through market‑data‑service to its hard dependents (orders‑service, portfolio‑service, edge‑gateway) and produced a modest, intermittent rise in error rates (~2 % peak) and latency across many routes. A deploy of orders‑service v2.16.0 at 11:05 UTC added batch fee‑schedule lookups, but per‑minute vendor error data shows a gradual increase beginning well before the deploy with no step change at 11:05, and the orders‑service outbound gRPC call rate to market‑data‑service is unavailable. Because the key evidence gap (per‑minute vendor error series) remains unfilled, the investigation was stopped as inconclusive.",
+  "root_cause": null,
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "quotes-vendor",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "The external quotes‑vendor began returning 429/503 responses around 10:35 UTC (perhaps due to a quota change or traffic surge). market‑data‑service forwards these as gRPC errors to its hard dependents (orders‑service, portfolio‑service, edge‑gateway), causing a modest rise in error rates and latency across those services while payments‑service (which does not depend on the vendor) remains healthy.",
+        "supporting": [
+          "OBS-14",
+          "OBS-15",
+          "OBS-16",
+          "OBS-27",
+          "OBS-20",
+          "OBS-23",
+          "OBS-2",
+          "OBS-3",
+          "OBS-10",
+          "OBS-11"
+        ],
+        "contradicting": [
+          "OBS-18",
+          "OBS-24",
+          "OBS-5",
+          "OBS-6",
+          "OBS-7",
+          "OBS-21"
+        ],
+        "assumptions": [
+          "ASM-7",
+          "ASM-8",
+          "ASM-9"
+        ],
+        "predictions": [
+          "Per‑minute vendor_error_rate shows a smooth rise from ~10:35 with no step at 11:05.",
+          "Orders‑service → market‑data‑service gRPC call‑rate is flat across the deploy.",
+          "Edge‑gateway per‑route error‑rates are elevated only on routes that fan‑out to market‑data‑service (portfolio, orders) and not on payments."
+        ],
+        "confidence": 0.58,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.5,
+      "calibration": [
+        "it has unresolved blocking objections"
+      ],
+      "confidence_band": "medium",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "gap_unaddressed",
+          "severity": "blocking",
+          "detail": "Only summary vendor_error_rate stats are present; per‑minute series needed to verify smooth rise vs step (GAP‑10).",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "HYP‑1 (deploy‑induced fan‑out) has not been excluded. (not blocking: this review rejected HYP-1 or found it flawed)",
+          "alternative": "HYP-1",
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "unsupported_claim",
+          "severity": "minor",
+          "detail": "Claims vendor errors propagate to edge‑gateway errors, but edge‑gateway error rise is modest (2.5 % peak) and could have other contributors.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "code_regression",
+          "trigger": "chg:2561"
+        },
+        "mechanism": "The v2.16.0 deploy introduced batch fee‑schedule lookups that added a new fan‑out to market‑data‑service (or increased call volume). Calls to the external quotes‑vendor now hit the vendor’s rate limit, producing 429/503 responses that propagate as errors/timeouts up the call chain, raising edge‑gateway error rate and latency.",
+        "supporting": [
+          "OBS-1",
+          "OBS-4",
+          "OBS-11",
+          "OBS-14",
+          "OBS-15",
+          "OBS-16",
+          "OBS-27"
+        ],
+        "contradicting": [
+          "OBS-5",
+          "OBS-31",
+          "OBS-32",
+          "OBS-18",
+          "OBS-24",
+          "OBS-6",
+          "OBS-7",
+          "OBS-21"
+        ],
+        "assumptions": [
+          "ASM-10",
+          "ASM-11",
+          "ASM-12"
+        ],
+        "predictions": [
+          "Orders‑service gRPC call‑rate to market‑data‑service jumps immediately after 11:05.",
+          "Vendor_error_rate shows a step increase at 11:05 rather than a gradual rise.",
+          "Edge‑gateway error‑rate on the orders route spikes more than on portfolio."
+        ],
+        "confidence": 0.31,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.31,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "Predicts a step increase in vendor_error_rate at 11:05, but per‑minute data shows a gradual rise starting at 10:35 with no abrupt change at deploy (OBS‑31, OBS‑32).",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "alternative_not_excluded",
+          "severity": "blocking",
+          "detail": "HYP‑2 (vendor degradation) explains the same symptoms and is not ruled out.",
+          "alternative": "HYP-2",
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "gap_unaddressed",
+          "severity": "blocking",
+          "detail": "Orders‑service outbound gRPC call rate to market‑data‑service is not available (GAP‑14); a jump there would support the batch‑lookup fan‑out claim.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "edge-gateway",
+          "category": "config_change",
+          "trigger": null
+        },
+        "mechanism": "An unreleased configuration change or feature‑flag toggle on edge‑gateway (e.g., altered retry/back‑off or timeout settings) around 11:00 caused a small increase in error rate and latency for all downstream routes. The effect appears across portfolio, orders, and payments routes, but payments‑service metrics show no degradation, making this unlikely.",
+        "supporting": [
+          "OBS-2",
+          "OBS-3",
+          "OBS-11"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-7",
+          "OBS-21"
+        ],
+        "assumptions": [
+          "ASM-13"
+        ],
+        "predictions": [
+          "Edge‑gateway config/flag audit shows a change at ~11:00.",
+          "All downstream routes exhibit a similar error‑rate increase."
+        ],
+        "confidence": 0.07,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.07,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "No config/flag change on edge‑gateway is observed in the change history (GAP‑4, GAP‑5).",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Payments‑service metrics remain at baseline (OBS‑6, OBS‑7), contradicting a gateway‑wide configuration impact.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "postgres-orders",
+          "category": "resource_exhaustion",
+          "trigger": null
+        },
+        "mechanism": "The orders‑service deploy increased load on postgres‑orders (e.g., new batch queries), exhausting connection pool or causing slow queries, which manifests as higher error rates in orders‑service and downstream edge‑gateway. No direct metrics for postgres‑orders are available.",
+        "supporting": [
+          "OBS-4",
+          "OBS-9"
+        ],
+        "contradicting": [
+          "OBS-5",
+          "OBS-6",
+          "OBS-7",
+          "OBS-14",
+          "OBS-15",
+          "OBS-16",
+          "OBS-27"
+        ],
+        "assumptions": [
+          "ASM-14"
+        ],
+        "predictions": [
+          "Postgres‑orders shows connection‑pool saturation or query‑latency rise after 11:05.",
+          "Orders‑service latency to DB rises (not observed)."
+        ],
+        "confidence": 0.04,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.04,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-4",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "No postgres‑orders metrics (connection pool, query latency) were collected (GAP‑1); orders‑service latency is unchanged (OBS‑5).",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-4",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Vendor 429/503 errors appear before the deploy (OBS‑14‑16) and payments‑service, which does not use postgres‑orders, is healthy.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "deploy on orders-service at 11:05:12 UTC by ci/deploy-bot: orders-service v2.16.0: batch fee schedule lookups (version: 2.16.0, previous_version: 2.15.2, commit: 8b20f4e, diff: +142 / -97)",
+      "artifacts": [
+        "chg:2561"
+      ],
+      "service": "orders-service",
+      "id": "OBS-1",
+      "source": "change-census"
+    },
+    {
+      "statement": "Edge‑gateway error_rate peaked at 2.53 % (max) with a window‑average of 0.96 % versus a baseline of 0.20 %.",
+      "artifacts": [
+        "metric:edge-gateway/error_rate"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-2",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Edge‑gateway p99 latency rose from a baseline of 342 ms to a window‑average of 414 ms and a last value of 436 ms.",
+      "artifacts": [
+        "metric:edge-gateway/latency_p99_ms"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-3",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Orders‑service error_rate averaged 0.45 % (max 1.26 %) versus a baseline of 0.18 %.",
+      "artifacts": [
+        "metric:orders-service/error_rate"
+      ],
+      "service": "orders-service",
+      "id": "OBS-4",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Orders‑service p99 latency was near baseline (baseline 256 ms, window‑average 260 ms, last 236 ms).",
+      "artifacts": [
+        "metric:orders-service/latency_p99_ms"
+      ],
+      "service": "orders-service",
+      "id": "OBS-5",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Payments‑service error_rate remained at baseline (window‑average 0.20 % vs baseline 0.21 %).",
+      "artifacts": [
+        "metric:payments-service/error_rate"
+      ],
+      "service": "payments-service",
+      "id": "OBS-6",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Payments‑service latency (p50 and p99) stayed within baseline bounds.",
+      "artifacts": [
+        "metric:payments-service/latency_p50_ms",
+        "metric:payments-service/latency_p99_ms"
+      ],
+      "service": "payments-service",
+      "id": "OBS-7",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "orders-service has hard dependencies on market-data-service (gRPC, 500 ms timeout) and postgres-orders (SQL, 2 s timeout).",
+      "artifacts": [
+        "dep:orders-service->market-data-service",
+        "dep:orders-service->postgres-orders"
+      ],
+      "service": "orders-service",
+      "id": "OBS-9",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "portfolio-service also has a hard dependency on market-data-service (gRPC, 500 ms timeout).",
+      "artifacts": [
+        "dep:portfolio-service->market-data-service"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-10",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "edge-gateway has hard dependencies on orders-service, market-data-service, and portfolio-service (HTTP, 2–3 s timeouts).",
+      "artifacts": [
+        "dep:edge-gateway->orders-service",
+        "dep:edge-gateway->market-data-service",
+        "dep:edge-gateway->portfolio-service"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-11",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "market‑data‑service logged 7 WARN events “quotes‑vendor responded 429; backing off” from 10:35:49 UTC to 11:44:30 UTC.",
+      "artifacts": [
+        "log:04398295b807"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-14",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "market‑data‑service logged 3 ERROR 503 responses on GET /v1/quotes between 10:50:02 UTC and 11:43:43 UTC.",
+      "artifacts": [
+        "log:11728e4fe3dc"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-15",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "vendor_error_rate metric peaked at 0.002124 (max) with a mean of 0.001012, above its baseline mean of 0.000973.",
+      "artifacts": [
+        "metric:market-data-service/vendor_error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-16",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "market‑data‑service overall error_rate remained near baseline (mean 0.001866 vs baseline 0.001955).",
+      "artifacts": [
+        "metric:market-data-service/error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-18",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "Request rate rose to a mean of 413 req/s (baseline 396.8 req/s).",
+      "artifacts": [
+        "metric:market-data-service/rps"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-20",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "portfolio-service error_rate averaged 0.1985 % (max 0.3138 %) versus a baseline of 0.2112 %.",
+      "artifacts": [
+        "metric:portfolio-service/error_rate"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-21",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "portfolio-service latency_p99 averaged 416.6 ms (baseline 415.6 ms) with a last value of 519.2 ms.",
+      "artifacts": [
+        "metric:portfolio-service/latency_p99_ms"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-23",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "market-data-service error_rate averaged 0.1866 % (max 0.393 %) versus a baseline of 0.1955 %.",
+      "artifacts": [
+        "metric:market-data-service/error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-24",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "market-data-service vendor_error_rate averaged 0.1012 % (baseline 0.0973 %) with a max of 0.2124 %.",
+      "artifacts": [
+        "metric:market-data-service/vendor_error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-27",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "market‑data‑service vendor_error_rate (3‑minute granularity) ranged from 0.00055 to 0.00157 (ratio) between 10:30 UTC and 11:48 UTC, with a window mean of 0.001012 versus baseline_mean 0.000973.",
+      "artifacts": [
+        "metric:market-data-service/vendor_error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-31",
+      "source": "r2-observability-5"
+    },
+    {
+      "statement": "The highest vendor_error_rate value (0.002124) occurred at 11:48 UTC, well after the 11:05 deploy; values around the deploy (10:57‑11:06) stayed near 0.00055‑0.00117, showing no abrupt increase.",
+      "artifacts": [
+        "metric:market-data-service/vendor_error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-32",
+      "source": "r2-observability-5"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "market‑data‑service retries vendor 429/503 internally and does not count them in its own error_rate metric.",
+      "reason": "Observed vendor 429/503 warnings (OBS-14/15) while market‑data‑service overall error_rate stays at baseline (OBS-18/24).",
+      "id": "ASM-7",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "edge‑gateway’s default retry policy (e.g., 2 retries with exponential back‑off) masks most downstream failures, yielding only ~2 % end‑user error rate.",
+      "reason": "Support desk reports retries usually succeed; edge‑gateway error_rate modest (OBS-2).",
+      "id": "ASM-8",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The quotes‑vendor began enforcing a tighter rate‑limit (or experienced a quota change) around 10:35 UTC, independent of our deploy.",
+      "reason": "First vendor WARN at 10:35 (OBS-14) precedes orders‑service deploy at 11:05; vendor_error_rate rises gradually (OBS-31/32).",
+      "id": "ASM-9",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "orders‑service v2.16.0 adds a new batch fee‑schedule lookup that issues additional gRPC calls to market‑data‑service.",
+      "reason": "Deploy summary mentions “batch fee schedule lookups” (OBS-1).",
+      "id": "ASM-10",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The extra gRPC traffic from the batch lookup is enough to push the vendor over its limit after the deploy.",
+      "reason": "Hypothesis mechanism requires increased call volume to explain vendor errors.",
+      "id": "ASM-11",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "Orders‑service latency metric (p99) does not capture the added gRPC latency because the calls are made asynchronously or are cached.",
+      "reason": "Orders‑service latency unchanged (OBS-5) despite hypothesized extra calls.",
+      "id": "ASM-12",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "An undocumented edge‑gateway config/flag change altered retry/timeout behavior at ~11:00.",
+      "reason": "No config change recorded in change census (GAP-4); hypothesis needs a trigger.",
+      "id": "ASM-13",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "v2.16.0 introduced a heavy SQL batch that exhausted postgres‑orders connections.",
+      "reason": "Hypothesis H-4 assumes DB resource exhaustion; no metrics available (GAP-6).",
+      "id": "ASM-14",
+      "source": "r2-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_metrics",
+      "scope": "portfolio-service, market-data-service, auth-service",
+      "reason": "Metrics not queried; no error‑rate, latency, or saturation data available for these services.",
+      "id": "GAP-1",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "retry‑success / retry‑count metrics across the call chain",
+      "reason": "No metric series for retry outcomes were requested; cannot quantify retry‑success rate.",
+      "id": "GAP-2",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "WARN+ log patterns for all six services 10:30‑11:50 UTC",
+      "reason": "Log query not performed; error‑type details and stack traces are missing.",
+      "id": "GAP-3",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "market-data-service, postgres-orders, portfolio-service, edge-gateway, auth-service",
+      "reason": "Change census only returned the orders-service deploy; no deploy/config/flag/secret/infra records for the other services in the 10:30‑11:50 window were retrieved.",
+      "id": "GAP-4",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "feature‑flag or config service",
+      "reason": "No source for feature‑flag flips or configuration changes was queried; possible flag affecting fee‑schedule batching may exist.",
+      "id": "GAP-5",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "secret rotation / infra maintenance",
+      "reason": "Secret rotations or platform infra work (e.g., cert renewal, network change) were not captured in the census.",
+      "id": "GAP-6",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "redis-cache",
+      "reason": "No metrics were fetched for redis‑cache; cannot assess its health or saturation.",
+      "id": "GAP-7",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "quotes-vendor",
+      "reason": "Logs for the upstream quotes‑vendor were not queried; missing direct evidence of 429 generation.",
+      "id": "GAP-8",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "quotes-vendor",
+      "reason": "No vendor‑side metrics (error rate, latency, rate‑limit counters) were retrieved.",
+      "id": "GAP-9",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "market-data-service (time‑series points)",
+      "reason": "Only summary statistics were returned; per‑minute points are needed to pinpoint the exact onset of the vendor error‑rate rise.",
+      "id": "GAP-10",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "portfolio-service retry_success (or retry_count) metric",
+      "reason": "Metric not present in the service’s exported metrics; cannot quantify retry success.",
+      "id": "GAP-11",
+      "source": "r1-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "market-data-service retry_success (or retry_count) metric",
+      "reason": "Metric not present in the service’s exported metrics; cannot quantify retry success.",
+      "id": "GAP-12",
+      "source": "r1-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "auth-service retry_success (or retry_count) metric",
+      "reason": "Metric not present in the service’s exported metrics; cannot quantify retry success.",
+      "id": "GAP-13",
+      "source": "r1-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "orders-service gRPC call rate to market-data-service (per minute)",
+      "reason": "Metric grpc_calls_per_second does not exist on orders-service; available metrics lack a direct measure of outbound gRPC traffic.",
+      "id": "GAP-14",
+      "source": "r2-observability-5"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Enable a short‑circuit / fallback in market‑data‑service for quotes‑vendor 429/503 responses (e.g., serve stale cache or return degraded payload) so downstream services see fewer errors immediately.",
+      "rationale": "Vendor errors are already occurring and affect multiple services; a circuit‑breaker reduces impact while root cause is resolved.",
+      "hypothesis_id": "HYP-2",
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Increase edge‑gateway retry/back‑off settings for calls to orders‑service and portfolio‑service to absorb transient vendor failures.",
+      "rationale": "Retries already succeed most of the time; tuned retries lower the visible error rate for customers.",
+      "hypothesis_id": "HYP-2",
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Engage the quotes‑vendor to clarify quota limits, request a higher quota or dedicated capacity, and verify any recent quota change around 10:30 UTC.",
+      "rationale": "Vendor 429/503 responses are the proximal cause; fixing the quota eliminates the error source.",
+      "hypothesis_id": "HYP-2",
+      "urgency": "soon"
+    },
+    {
+      "kind": "fix",
+      "description": "Roll back orders‑service v2.16.0 or disable the new batch fee‑schedule lookup feature flag until the vendor issue is resolved and the call‑rate impact is quantified.",
+      "rationale": "If the deploy increased call volume, it may exacerbate vendor rate‑limiting; rollback removes that amplification.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add per‑minute vendor_error_rate and vendor_latency metrics (or export the existing high‑resolution series) to the monitoring dashboard and alert on sustained >0.1 % error rate.",
+      "rationale": "The investigation was blocked by lack of granular vendor error data; continuous visibility prevents future blind spots.",
+      "hypothesis_id": "HYP-2",
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Instrument orders‑service with an outbound gRPC call‑rate metric to market‑data‑service and add alerts for sudden spikes.",
+      "rationale": "Gap‑14 prevents confirming whether the deploy added load; metric enables rapid detection of similar regressions.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Retrieve per‑minute vendor_error_rate time series from market‑data‑service (or directly from the quotes‑vendor) for 10:00‑12:00 UTC to confirm smooth rise vs step at 11:05.",
+      "rationale": "Blocking objection on HYP‑2 (GAP‑10) – this data will confirm or refute the vendor‑degradation hypothesis.",
+      "hypothesis_id": "HYP-2",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Collect orders‑service outbound gRPC call counts to market‑data‑service (or add temporary logging) for the 10:30‑11:30 window.",
+      "rationale": "Blocking objection on HYP‑1 (GAP‑14) – needed to verify whether the deploy caused a call‑rate jump.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Audit edge‑gateway config/feature‑flag changes around 11:00 UTC (change history, flag service) to rule out HYP‑3.",
+      "rationale": "Blocking objection on HYP‑3 (GAP‑4, GAP‑5) – confirms no gateway‑wide config change contributed.",
+      "hypothesis_id": "HYP-3",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Gather postgres‑orders connection‑pool and query‑latency metrics for the incident window.",
+      "rationale": "Blocking objection on HYP‑4 (GAP‑1) – rules out DB exhaustion as a contributor.",
+      "hypothesis_id": "HYP-4",
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "What caused the quotes‑vendor error rate to start rising at ~10:35 UTC (quota change, traffic surge, upstream incident)?",
+    "Did the orders‑service v2.16.0 deploy increase the call volume to market‑data‑service, and by how much?",
+    "What is the exact per‑minute trajectory of vendor_error_rate around the deploy time?",
+    "Were there any edge‑gateway configuration or feature‑flag changes near 11:00 UTC?",
+    "What are the retry‑success rates at each hop (edge‑gateway → orders/portfolio → market‑data‑service → quotes‑vendor)?",
+    "Did postgres‑orders experience any saturation or latency increase during the window?"
+  ],
+  "termination": "time budget reached",
+  "stats": {
+    "rounds": 2,
+    "model_calls": 31,
+    "tool_calls": 16,
+    "tokens": 156466,
+    "elapsed_s": 1022.85
+  }
+}

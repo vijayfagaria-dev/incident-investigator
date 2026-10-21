@@ -1,0 +1,739 @@
+{
+  "incident_id": "T01",
+  "title": "Order edits failing",
+  "outcome": "inconclusive",
+  "outcome_reasons": [
+    "HYP-1 has unresolved blocking objections"
+  ],
+  "summary": "Order‑edit failures began at ~13:33 UTC after the orders‑service v2.15.0 deploy (chg:2501) added a PATCH /v1/orders amendment endpoint. The service logs show a NullPointerException in AmendOrderHandler.validate caused by a missing null guard on order.limitPrice, producing a sharp error‑rate spike (orders‑service error_rate ~0.06) that propagates as upstream 5xx from edge‑gateway. The most likely cause is a code regression in the new endpoint, but the full source diff of commit e4a91c2 has not been retrieved and the feature‑flag that enables the endpoint (order.amendment.enabled) has not been verified as flipped on at deploy. Because these two blocking gaps remain, the investigation was stopped on time‑budget and the outcome is inconclusive.",
+  "root_cause": null,
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "code_regression",
+          "trigger": "chg:2501"
+        },
+        "mechanism": "The v2.15.0 deploy added a PATCH /v1/orders amendment endpoint. AmendOrderHandler.validate reads order.limitPrice without a null guard; when limitPrice is missing a NullPointerException is thrown, producing 500 errors that propagate to edge-gateway as upstream 5xx.",
+        "supporting": [
+          "OBS-2",
+          "OBS-11",
+          "OBS-4",
+          "OBS-25",
+          "OBS-17",
+          "OBS-22",
+          "OBS-3",
+          "OBS-15",
+          "OBS-23",
+          "OBS-26"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-7",
+          "OBS-8",
+          "OBS-9",
+          "OBS-10",
+          "OBS-19",
+          "OBS-20"
+        ],
+        "assumptions": [
+          "ASM-7",
+          "ASM-8"
+        ],
+        "predictions": [
+          "Full source diff of commit e4a91c2 shows a direct access to order.limitPrice in AmendOrderHandler.validate with no null check.",
+          "Per‑endpoint metrics show the error‑rate spike confined to PATCH /v1/orders only.",
+          "Sample PATCH payloads that triggered the NPE omit a limitPrice field."
+        ],
+        "confidence": 0.78,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.5,
+      "calibration": [
+        "it has unresolved blocking objections"
+      ],
+      "confidence_band": "medium",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "gap_unaddressed",
+          "severity": "blocking",
+          "detail": "Full source diff of commit e4a91c2 (orders‑service v2.15.0) not retrieved; needed to verify missing null guard on order.limitPrice in AmendOrderHandler.validate.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "alternative_not_excluded",
+          "severity": "blocking",
+          "detail": "HYP‑4 (feature‑flag activation) offers an alternative explanation for the same deploy‑time spike and has not been ruled out.",
+          "alternative": "HYP-4",
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "feature_flag",
+          "trigger": "chg:2501"
+        },
+        "mechanism": "The v2.15.0 release includes a feature flag (order.amendment.enabled) that is flipped on at deploy time, instantly exposing the new amendment code path to 100% of traffic. The immediate, full‑traffic error‑rate jump matches an all‑at‑once flag activation.",
+        "supporting": [
+          "OBS-2",
+          "OBS-11",
+          "OBS-4",
+          "OBS-25",
+          "OBS-17",
+          "OBS-22"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-7",
+          "OBS-8",
+          "OBS-9",
+          "OBS-10",
+          "OBS-19",
+          "OBS-20"
+        ],
+        "assumptions": [
+          "ASM-9"
+        ],
+        "predictions": [
+          "Feature‑flag audit log shows order.amendment.enabled switched true at 13:31:20 UTC.",
+          "Turning the flag off now stops the 5xx spike."
+        ],
+        "confidence": 0.32,
+        "version": 1,
+        "round": 2
+      },
+      "confidence": 0.32,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-4",
+          "kind": "gap_unaddressed",
+          "severity": "blocking",
+          "detail": "Feature‑flag audit log for order.amendment.enabled not captured; cannot confirm flag was flipped on at deploy time.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-4",
+          "kind": "alternative_not_excluded",
+          "severity": "blocking",
+          "detail": "HYP‑1 (code regression) also explains the spike and has stronger direct evidence (NPE stack trace).",
+          "alternative": "HYP-1",
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "Bursts of quotes‑vendor 429/503 responses (starting 12:53 UTC) cause price look‑ups to fail, leaving limitPrice null for orders that later get amended. The failure propagates as NPE in orders‑service.",
+        "supporting": [
+          "OBS-6",
+          "OBS-7",
+          "OBS-8",
+          "OBS-13"
+        ],
+        "contradicting": [
+          "OBS-9",
+          "OBS-10",
+          "OBS-19",
+          "OBS-20",
+          "OBS-17",
+          "OBS-3",
+          "OBS-15"
+        ],
+        "assumptions": [
+          "ASM-3",
+          "ASM-4"
+        ],
+        "predictions": [
+          "Market‑data‑service gRPC client circuit‑breaker will be open/half‑open around 13:33.",
+          "Per‑endpoint metrics will show a concurrent spike in market‑data‑service call errors at 13:33."
+        ],
+        "confidence": 0.28,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.28,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Market‑data‑service error_rate, vendor_error_rate and latency remain at baseline (OBS‑9, OBS‑10, OBS‑19, OBS‑20), contradicting a degradation that would cause limitPrice to be null.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "temporal_violation",
+          "severity": "blocking",
+          "detail": "Quotes‑vendor 429/503 bursts begin at 12:53 UTC, but the orders‑service NPE appears at 13:33 UTC with no concurrent market‑data error spike.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-5",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "A transient Redis price‑cache miss/eviction caused limitPrice to be null for orders being amended. The NPE is a symptom of missing price data rather than a code bug; the spike coincides with the new endpoint being exercised.",
+        "supporting": [
+          "OBS-6",
+          "OBS-7",
+          "OBS-8",
+          "OBS-13"
+        ],
+        "contradicting": [
+          "OBS-9",
+          "OBS-10",
+          "OBS-19",
+          "OBS-20",
+          "OBS-17",
+          "OBS-22",
+          "OBS-3",
+          "OBS-15",
+          "OBS-23",
+          "OBS-26"
+        ],
+        "assumptions": [
+          "ASM-10",
+          "ASM-11"
+        ],
+        "predictions": [
+          "Redis‑cache miss/eviction metrics show a sharp rise at 13:33.",
+          "Market‑data‑service gRPC error‑code breakdown shows “price‑not‑found” errors rising at the same minute.",
+          "Disabling the amendment endpoint (feature flag off) eliminates the NPE even if cache misses continue."
+        ],
+        "confidence": 0.12,
+        "version": 1,
+        "round": 2
+      },
+      "confidence": 0.12,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-5",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Market‑data‑service metrics show no error/latency spike at 13:33 UTC (OBS‑19, OBS‑20); no Redis metrics available to support cache‑miss claim.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 5,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "auth-service",
+          "category": "config_change",
+          "trigger": "chg:2497"
+        },
+        "mechanism": "Increasing session.idle_timeout from 15 m to 30 m changes token renewal timing for long‑lived edit sessions, causing authentication failures that manifest as 500s downstream.",
+        "supporting": [
+          "OBS-1",
+          "OBS-12",
+          "OBS-13"
+        ],
+        "contradicting": [
+          "OBS-15",
+          "OBS-16",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5"
+        ],
+        "assumptions": [
+          "ASM-5",
+          "ASM-6"
+        ],
+        "predictions": [
+          "Auth‑service error‑rate or 4xx/5xx responses would rise after 12:55 UTC.",
+          "Edge‑gateway logs would show auth‑service upstream errors before orders‑service errors."
+        ],
+        "confidence": 0.07,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.07,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "No auth‑service error rise or edge‑gateway auth upstream errors observed before 13:33 UTC (OBS‑15, OBS‑16, OBS‑3, OBS‑4).",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "config on auth-service at 12:55:02 UTC by priya.nair: Raise session idle timeout for web clients (session.idle_timeout: 15m -> 30m)",
+      "artifacts": [
+        "chg:2497"
+      ],
+      "service": "auth-service",
+      "id": "OBS-1",
+      "source": "change-census"
+    },
+    {
+      "statement": "deploy on orders-service at 13:31:20 UTC by ci/deploy-bot: orders-service v2.15.0: add order amendment endpoint (version: 2.15.0, previous_version: 2.14.3, commit: e4a91c2, diff: +296 / -41)",
+      "artifacts": [
+        "chg:2501"
+      ],
+      "service": "orders-service",
+      "id": "OBS-2",
+      "source": "change-census"
+    },
+    {
+      "statement": "edge‑gateway began returning upstream 500 errors from orders‑service on the /v1/orders route at 13:34:05 UTC (379 occurrences through 13:57:54).",
+      "artifacts": [
+        "log:a41f996d606e"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-3",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "orders‑service logged a NullPointerException because order.limitPrice is null in AmendOrderHandler.validate for PATCH /v1/orders, first seen at 13:33:01 UTC (413 occurrences through 13:57:50).",
+      "artifacts": [
+        "log:0953dd5b47dc"
+      ],
+      "service": "orders-service",
+      "id": "OBS-4",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "orders‑service also emitted generic 500 error lines for POST /v1/orders starting at 13:33:15 UTC (30 occurrences).",
+      "artifacts": [
+        "log:45e18c1c5f9a"
+      ],
+      "service": "orders-service",
+      "id": "OBS-5",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "market‑data‑service reported quotes‑vendor 429 rate‑limit responses throughout the window (first at 12:53:15, last at 13:55:58) and three 503 responses on GET /v1/quotes/{symbol} starting at 13:12:53.",
+      "artifacts": [
+        "log:ba5421c7350c",
+        "log:3b7d1bd7af1a"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-6",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "market-data-service logged 6 occurrences of “quotes-vendor responded 429; backing off <ms>ms” between 12:53:15 UTC and 13:55:58 UTC.",
+      "artifacts": [
+        "log:ba5421c7350c"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-7",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "market-data-service logged 3 occurrences of “GET /v1/quotes/{symbol} 503 40ms” between 13:12:53 UTC and 13:47:02 UTC, indicating failed price look‑ups.",
+      "artifacts": [
+        "log:3b7d1bd7af1a"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-8",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "Vendor error‑rate metric for market-data-service hovered around its baseline (mean 0.00097, baseline 0.00098) with brief peaks up to 0.0013 at 13:02 and 13:17 UTC, but no sustained spike.",
+      "artifacts": [
+        "metric:market-data-service/vendor_error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-9",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "Overall request latency (p99) and CPU/memory utilization for market-data-service remained within normal ranges throughout the window.",
+      "artifacts": [
+        "metric:market-data-service/latency_p99_ms",
+        "metric:market-data-service/cpu_util",
+        "metric:market-data-service/mem_util"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-10",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "orders‑service v2.15.0 was deployed at 13:31:20 UTC (chg:2501) adding an order amendment endpoint (+296/-41 lines).",
+      "artifacts": [
+        "chg:2501"
+      ],
+      "service": "orders-service",
+      "id": "OBS-11",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "auth‑service config changed at 12:55:02 UTC (chg:2497) raising session.idle_timeout from 15 m to 30 m.",
+      "artifacts": [
+        "chg:2497"
+      ],
+      "service": "auth-service",
+      "id": "OBS-12",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "The hard‑dependency chain for order‑edit is edge‑gateway → orders‑service (dep:edge-gateway->orders-service) → market‑data‑service (dep:orders-service->market-data-service) → quotes‑vendor (dep:market-data-service->quotes-vendor) plus edge‑gateway → auth‑service (dep:edge-gateway->auth-service) and orders‑service → postgres‑orders (dep:orders-service->postgres-orders).",
+      "artifacts": [
+        "dep:edge-gateway->orders-service",
+        "dep:orders-service->market-data-service",
+        "dep:market-data-service->quotes-vendor",
+        "dep:edge-gateway->auth-service",
+        "dep:orders-service->postgres-orders"
+      ],
+      "service": null,
+      "id": "OBS-13",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "edge‑gateway overall error_rate exceeded its baseline (max 0.01176 vs baseline 0.002013) but the first upstream 5xx from orders‑service was logged at 13:34:05 UTC, indicating the spike occurred after 13:33.",
+      "artifacts": [
+        "metric:edge-gateway/error_rate",
+        "log:a41f996d606e"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-15",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "edge‑gateway p99 latency stayed at baseline (mean 339.4 ms, baseline 339.4 ms; max 418.3 ms) with no evidence of a pre‑13:33 spike.",
+      "artifacts": [
+        "metric:edge-gateway/latency_p99_ms"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-16",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "orders‑service error_rate rose sharply (max 0.06632 vs baseline 0.002091). The first NullPointerException in AmendOrderHandler.validate was logged at 13:33:01 UTC, showing the error‑rate spike at/around 13:33.",
+      "artifacts": [
+        "metric:orders-service/error_rate",
+        "log:0953dd5b47dc"
+      ],
+      "service": "orders-service",
+      "id": "OBS-17",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "market‑data‑service error_rate and vendor_error_rate stayed at baseline levels (error_rate max 0.0034 vs baseline 0.00197; vendor_error_rate mean 0.00097 vs baseline 0.00098) with no spike before 13:33.",
+      "artifacts": [
+        "metric:market-data-service/error_rate",
+        "metric:market-data-service/vendor_error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-19",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "market‑data‑service p99 latency remained at baseline (mean 258.4 ms, baseline 259.5 ms; max 325.3 ms).",
+      "artifacts": [
+        "metric:market-data-service/latency_p99_ms"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-20",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "orders‑service error_rate was at baseline (~0.002) until 13:33 UTC, then spiked to 0.0615 at 13:33 and remained elevated (0.042‑0.052) through 13:39 UTC.",
+      "artifacts": [
+        "metric:orders-service/error_rate"
+      ],
+      "service": "orders-service",
+      "id": "OBS-22",
+      "source": "r2-observability-6"
+    },
+    {
+      "statement": "edge‑gateway error_rate remained at baseline (~0.002) through 13:33 UTC and rose sharply starting at 13:34 UTC, reaching 0.0118 at 13:35 UTC and staying above baseline through 13:39 UTC.",
+      "artifacts": [
+        "metric:edge-gateway/error_rate"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-23",
+      "source": "r2-observability-6"
+    },
+    {
+      "statement": "First NullPointerException in AmendOrderHandler.validate (order.limitPrice is null) logged at 2026‑10‑05T13:33:01Z (413 occurrences through 13:57:50).",
+      "artifacts": [
+        "log:0953dd5b47dc"
+      ],
+      "service": "orders-service",
+      "id": "OBS-25",
+      "source": "r2-dependency-5"
+    },
+    {
+      "statement": "Edge‑gateway began returning upstream 5xx from orders‑service on /v1/orders at 2026‑10‑05T13:34:05Z (379 occurrences through 13:57:54).",
+      "artifacts": [
+        "log:a41f996d606e"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-26",
+      "source": "r2-dependency-5"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "Vendor 429/503 bursts are sufficient to empty the price cache for the symbols being edited.",
+      "reason": "Market‑data‑service logs show repeated 429/503; if cache miss occurs, limitPrice could be null.",
+      "id": "ASM-3",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "Orders‑service has no fallback/default price when market‑data lookup fails.",
+      "reason": "No evidence of fallback logic in current observations; the NPE suggests a missing value is not handled.",
+      "id": "ASM-4",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The idle‑timeout change could affect token renewal only for long‑lived edit sessions.",
+      "reason": "Config change raises timeout; longer sessions might hit renewal edge cases.",
+      "id": "ASM-5",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "Auth failures would surface as 401/403 rather than 500.",
+      "reason": "Standard HTTP semantics; observed errors are 5xx from orders‑service.",
+      "id": "ASM-6",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The diff of commit e4a91c2 contains an unguarded read of order.limitPrice in AmendOrderHandler.validate.",
+      "reason": "Change‑census only shows line‑count summary; the exact code has not been retrieved.",
+      "id": "ASM-7",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The NPE stack trace (log 0953dd5b47dc) points to the exact line in AmendOrderHandler.validate that accesses order.limitPrice without a null guard.",
+      "reason": "Log excerpt shows NullPointerException in that handler but full stack trace not yet fetched.",
+      "id": "ASM-8",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The release process for v2.15.0 includes a feature flag (order.amendment.enabled) that is turned on at deploy time.",
+      "reason": "Common pattern in this org; change‑census does not capture flag flips (GAP‑8).",
+      "id": "ASM-9",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "Order limitPrice is populated only via a cached quote; a cache miss returns null rather than a price.",
+      "reason": "Architecture knowledge; not directly observed in logs.",
+      "id": "ASM-10",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The cache‑miss rate spiked at 13:33 coincidentally with the deploy.",
+      "reason": "No cache metrics retrieved (GAP‑3, GAP‑4); assumed to explain temporal coincidence.",
+      "id": "ASM-11",
+      "source": "r2-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_metrics",
+      "scope": "latency, error‑rate, timeout, saturation for edge‑gateway, orders‑service, market‑data‑service, quotes‑vendor, redis‑cache",
+      "reason": "Metrics not fetched; required to confirm quantitative spikes and cache behavior.",
+      "id": "GAP-1",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "quotes‑vendor and redis‑cache logs at WARN/ERROR",
+      "reason": "No log data returned for those services; need to verify vendor errors or cache misses.",
+      "id": "GAP-2",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "quotes-vendor service logs (WARN+) for 12:50‑13:58 UTC",
+      "reason": "Tool step budget exhausted; need vendor‑side error/rate‑limit logs to confirm 429 source.",
+      "id": "GAP-3",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "redis-cache service logs (WARN+) for 12:50‑13:58 UTC",
+      "reason": "Tool step budget exhausted; cache miss/eviction could amplify vendor calls.",
+      "id": "GAP-4",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "market-data-service gRPC latency, error‑code breakdown, circuit‑breaker state metrics",
+      "reason": "Not available in default metric set; need dedicated series to pinpoint price‑lookup failures.",
+      "id": "GAP-5",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "quotes-vendor HTTP health / rate‑limit quota metrics",
+      "reason": "Not queried; required to verify vendor‑side limit change.",
+      "id": "GAP-6",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Full diff of commit e4a91c2 (chg:2501) to see exact code added for order amendment",
+      "reason": "Change‑census only shows summary (+296/-41); detailed diff not retrieved",
+      "id": "GAP-7",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Feature‑flag state controlling the new amendment endpoint",
+      "reason": "Feature‑flag flips are not captured in the change‑census output",
+      "id": "GAP-8",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Infrastructure incidents affecting quotes‑vendor HTTPS endpoint (dep:market-data-service->quotes-vendor) during 13:30‑13:40 UTC",
+      "reason": "No infra change recorded, but external vendor outage could cause failures",
+      "id": "GAP-9",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Postgres‑orders health metrics (connection pool, replication lag) around 13:35 UTC",
+      "reason": "No config/secret change recorded; DB‑side issue could still manifest",
+      "id": "GAP-10",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "Per‑endpoint (edit‑order) latency, error‑rate, and timeout series for edge‑gateway → orders‑service → market‑data‑service → quotes‑vendor",
+      "reason": "Only aggregate service‑level metrics are available; minute‑resolution series for the specific call chain were not returned.",
+      "id": "GAP-11",
+      "source": "r1-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "Timeout metrics (e.g., request_timeout_count, upstream_timeout) for any service in the chain",
+      "reason": "No timeout metrics are exposed in the metric catalog for the listed services.",
+      "id": "GAP-12",
+      "source": "r1-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "edge-gateway error_rate per minute 13:30‑13:40",
+      "reason": "Metric series not yet retrieved; required to complete the requested comparison.",
+      "id": "GAP-13",
+      "source": "r2-observability-6"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Full source diff of commit e4a91c2 (orders‑service v2.15.0)",
+      "reason": "The change‑history endpoint only returns a line‑count summary (+296/‑41) and does not expose the actual code changes needed to verify the presence or absence of a null check on order.limitPrice.",
+      "id": "GAP-14",
+      "source": "r2-dependency-5"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Confirmation that the NPE path is exercised only by the newly added amendment endpoint",
+      "reason": "Current logs show NPE timestamps but do not include request‑path correlation; without request‑path data we cannot definitively prove the new endpoint is the sole trigger.",
+      "id": "GAP-15",
+      "source": "r2-dependency-5"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Disable the order amendment feature flag (order.amendment.enabled) to stop the NPE‑driven 5xx spike immediately.",
+      "rationale": "Both HYP‑1 (code regression) and HYP‑4 (feature‑flag activation) predict that turning the flag off will eliminate the error surge; this stops customer impact while the root cause is confirmed.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Add a null check for order.limitPrice in AmendOrderHandler.validate (or guard the price lookup) and deploy a hot‑fix.",
+      "rationale": "HYP‑1 identifies the missing guard as the direct mechanism of the NPE; once the diff confirms the defect, the fix removes the root cause.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Introduce a mandatory code‑review rule and automated test that any new endpoint accessing order.limitPrice must handle null values.",
+      "rationale": "Prevents recurrence of the same regression in future releases (addresses HYP‑1).",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Retrieve the full source diff of commit e4a91c2 (orders‑service v2.15.0) to verify the presence/absence of a null guard on order.limitPrice.",
+      "rationale": "GAP‑7 / GAP‑14 block confirmation of HYP‑1; the diff is the decisive evidence.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Obtain the feature‑flag audit log for order.amendment.enabled to confirm whether it was switched on at 13:31:20 UTC.",
+      "rationale": "GAP‑8 blocks exclusion of HYP‑4; the flag state determines if the new code path was exposed to 100 % traffic.",
+      "hypothesis_id": "HYP-4",
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Correlate request‑path data with the NPE logs to prove the exception occurs only on the newly added PATCH /v1/orders endpoint.",
+      "rationale": "GAP‑15 leaves open whether other paths could trigger the same NPE.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    }
+  ],
+  "open_questions": [
+    "Was the feature flag order.amendment.enabled turned on at deploy time (13:31:20 UTC)?",
+    "Does the full diff of commit e4a91c2 show a direct access to order.limitPrice without a null check in AmendOrderHandler.validate?",
+    "Are there any other code paths (e.g., POST /v1/orders) that can reach the same validation and cause the NPE?",
+    "Did market‑data‑service or Redis cache experience any degradation at 13:33 UTC that could leave limitPrice null?",
+    "What is the exact per‑endpoint error‑rate profile for PATCH /v1/orders versus other order endpoints during the incident?"
+  ],
+  "termination": "time budget reached",
+  "stats": {
+    "rounds": 2,
+    "model_calls": 34,
+    "tool_calls": 16,
+    "tokens": 166470,
+    "elapsed_s": 971.22
+  }
+}

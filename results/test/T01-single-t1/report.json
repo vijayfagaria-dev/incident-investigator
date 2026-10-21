@@ -1,0 +1,329 @@
+{
+  "incident_id": "T01",
+  "title": "Order edits failing",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "A deploy of orders-service v2.15.0 at 13:31 UTC introduced a new order‑amendment endpoint. Within two minutes the new validation code in AmendOrderHandler.validate began throwing a NullPointerException because it dereferenced order.limitPrice without a null check. This caused ~447 amendment requests to fail with HTTP 500, which edge-gateway surfaced as a spike of 5xx on /v1/orders (~420 occurrences). No other service or infrastructure change coincided, and system‑level metrics remained normal. The root cause is a code regression introduced by the deploy.",
+  "root_cause": {
+    "service": "orders-service",
+    "category": "code_regression",
+    "trigger": "chg:2501"
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "code_regression",
+          "trigger": "chg:2501"
+        },
+        "mechanism": "The v2.15.0 deploy added a new amendment endpoint whose validation code dereferences order.limitPrice without a null check. When clients edit an open order that lacks a limit price, the NPE is thrown, causing HTTP 500 responses that edge-gateway propagates as 5xx.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-7"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2",
+          "ASM-4"
+        ],
+        "predictions": [
+          "Rolling back to v2.14.3 eliminates the NPE and restores edit‑order success.",
+          "Adding a null guard for limitPrice in the validation code stops the 500s while keeping the endpoint."
+        ],
+        "confidence": 0.92,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.92,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "data_issue",
+          "trigger": null
+        },
+        "mechanism": "Existing orders have null limitPrice; the new amendment validation now checks this field, so the NPE reflects a pre‑existing data gap rather than a code bug.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-4"
+        ],
+        "contradicting": [
+          "OBS-5",
+          "OBS-6"
+        ],
+        "assumptions": [
+          "ASM-3",
+          "ASM-4"
+        ],
+        "predictions": [
+          "If the same orders were edited before the deploy they would have succeeded (no validation).",
+          "A data‑migration fixing null limitPrice would also resolve the errors without code change."
+        ],
+        "confidence": 0.15,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.15,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "A slowdown or failure in market-data-service causes the amendment handler to receive a null price, leading to the NPE.",
+        "supporting": [],
+        "contradicting": [
+          "OBS-6",
+          "OBS-7"
+        ],
+        "assumptions": [
+          "ASM-5"
+        ],
+        "predictions": [
+          "Market-data-service logs would show increased latency or errors at 13:31‑13:35.",
+          "Orders-service calls to market-data-service (grpc, 500 ms timeout) would show elevated error rates."
+        ],
+        "confidence": 0.05,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.05,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "feature_flag",
+          "trigger": null
+        },
+        "mechanism": "An unrecorded feature‑flag enabling the amendment endpoint was flipped at 13:31, activating the buggy validation.",
+        "supporting": [],
+        "contradicting": [
+          "OBS-4",
+          "OBS-6"
+        ],
+        "assumptions": [
+          "ASM-6"
+        ],
+        "predictions": [
+          "Feature‑flag audit would show a flag change at 13:31.",
+          "Disabling the flag would stop the errors without a code rollback."
+        ],
+        "confidence": 0.03,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.03,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "orders-service logs show a NullPointerException in AmendOrderHandler.validate (PATCH /v1/orders/<order>) 447 times, first at 13:33:01 UTC, last at 13:59:58 UTC.",
+      "artifacts": [
+        "log:0953dd5b47dc"
+      ],
+      "service": "orders-service",
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "The exception message is “Cannot invoke BigDecimal.compareTo(Object) because order.limitPrice is null”, indicating a missing null check on order.limitPrice.",
+      "artifacts": [
+        "log:0953dd5b47dc"
+      ],
+      "service": "orders-service",
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "edge-gateway logs show “upstream orders-service returned 500 (route /v1/orders)” 420 times, first at 13:34:05 UTC.",
+      "artifacts": [
+        "log:a41f996d606e"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "A deploy of orders-service v2.15.0 (“add order amendment endpoint”) occurred at 13:31:20 UTC (chg:2501).",
+      "artifacts": [
+        "chg:2501"
+      ],
+      "service": "orders-service",
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "orders-service error_rate metric jumps from baseline 0.0021 to mean 0.022 during the window.",
+      "artifacts": [
+        "metric:orders-service/error_rate"
+      ],
+      "service": "orders-service",
+      "id": "OBS-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "Change history for orders-service and its hard dependencies shows no other deploys, config changes, feature‑flag flips, secret rotations or infra work between 12:00‑14:00 UTC.",
+      "artifacts": [
+        "chg:2501"
+      ],
+      "service": "orders-service",
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "Dependency graph shows a hard HTTP dependency edge‑gateway → orders-service (timeout 3000 ms).",
+      "artifacts": [
+        "dep:edge-gateway->orders-service"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-7",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The PATCH /v1/orders endpoint is the only code path that invokes AmendOrderHandler.validate.",
+      "reason": "The new amendment endpoint was added in v2.15.0 and no other endpoint was changed in the deploy.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "The NPE aborts the request and returns HTTP 500 to edge-gateway.",
+      "reason": "Standard Spring/Java exception handling converts uncaught NPE to 500.",
+      "id": "ASM-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Pre‑existing open orders may have limitPrice = null, and the new validation now exposes this.",
+      "reason": "The field was not previously validated; the new endpoint adds validation.",
+      "id": "ASM-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "The amendment endpoint did not exist before v2.15.0, so the validation code is new.",
+      "reason": "Deploy summary states “add order amendment endpoint”.",
+      "id": "ASM-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "Market‑data-service showed no anomalies in the window (no changes, no error logs observed).",
+      "reason": "Change history and lack of alerts for market-data-service.",
+      "id": "ASM-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "All production changes are captured in the change‑history store; an unrecorded feature‑flag flip is unlikely.",
+      "reason": "Change‑history query returned only the deploy.",
+      "id": "ASM-6",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "get_change_history",
+      "scope": "Source diff for commit e4a91c2 (orders-service v2.15.0)",
+      "reason": "Tooling does not provide source diffs; needed to confirm exact validation change.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "orders-service logs before 13:31 for PATCH /v1/orders",
+      "reason": "Not queried; would prove the NPE is new.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs / query_metrics",
+      "scope": "market-data-service 13:00‑14:00",
+      "reason": "Not examined; needed to fully rule out dependency degradation.",
+      "id": "GAP-3",
+      "source": "investigate"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Feature‑flag audit for orders-service amendment endpoint",
+      "reason": "Change history does not capture flag flips; needed to rule out H4.",
+      "id": "GAP-4",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Roll back orders-service to v2.14.3 or deploy a hot‑fix v2.15.1 with a null check on order.limitPrice.",
+      "rationale": "Immediately stops the NPE and restores edit‑order functionality.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Add null guard / default handling for limitPrice in AmendOrderHandler.validate and release v2.15.1.",
+      "rationale": "Permanent code fix while preserving the new amendment feature.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add unit and integration tests covering amendment of orders with missing limitPrice.",
+      "rationale": "Prevents regression of the same null‑check omission.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Update deploy checklist to require validation null‑checks and contract tests for new endpoints.",
+      "rationale": "Process improvement to catch similar bugs before production.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "What exact code change in commit e4a91c2 introduced the missing null check? (source diff unavailable).",
+    "Did market-data-service experience any latency or error spikes between 13:31‑13:35? (logs/metrics not queried).",
+    "Is there a feature‑flag controlling the amendment endpoint that could have been toggled independently of the deploy? (flag audit not captured)."
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 7,
+    "tool_calls": 5,
+    "tokens": 43754,
+    "elapsed_s": 208.86
+  }
+}

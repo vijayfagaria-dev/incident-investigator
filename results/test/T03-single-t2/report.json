@@ -1,0 +1,384 @@
+{
+  "incident_id": "T03",
+  "title": "Portfolio and order pages slow, users logged out",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "At 09:31 UTC a DBA raised postgres‑orders.work_mem from 4 MiB to 8 MiB (chg:2519). Within ~40 min CPU, active connections and query latency rose sharply. By 10:13 UTC portfolio‑service began a massive cache‑miss storm for position data, forcing direct DB reads. The positions query (SELECT * FROM positions WHERE account_id = $1) slowed to ~1.8 s, exceeding the 2 s client timeout and producing thousands of timeout errors. Slow queries held connections open, exhausting the pool; PostgreSQL then emitted “remaining connection slots are reserved…” errors. Downstream callers (portfolio‑service, orders‑service) returned 5xx/502 and some users were logged out. The config change, combined with pre‑existing checkpoint pressure, pushed the primary over its memory/connection ceiling.",
+  "root_cause": {
+    "service": "postgres-orders",
+    "category": "config_change",
+    "trigger": "chg:2519"
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "postgres-orders",
+          "category": "config_change",
+          "trigger": "chg:2519"
+        },
+        "mechanism": "Increasing work_mem doubles per‑query memory allocation. Under existing load the extra memory pushes the server toward its max_connections memory limit, causing queries to run slower (more paging/CPU) and connections to stay open longer, exhausting the pool and generating timeout errors.",
+        "supporting": [
+          "OBS-3",
+          "OBS-4",
+          "OBS-7",
+          "OBS-8",
+          "OBS-9"
+        ],
+        "contradicting": [
+          "OBS-5"
+        ],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "Rolling back work_mem to 4 MiB will reduce CPU and connection usage.",
+          "pg_stat_statements will show increased sort/hash memory per query after the change."
+        ],
+        "confidence": 0.55,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.55,
+      "calibration": [],
+      "confidence_band": "medium",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "postgres-orders",
+          "category": "capacity_saturation",
+          "trigger": null
+        },
+        "mechanism": "A sudden traffic surge (unobserved) caused a burst of cache misses, driving many more concurrent position queries. The fixed connection pool could not absorb the added load once queries slowed, leading to pool exhaustion and timeouts.",
+        "supporting": [
+          "OBS-1",
+          "OBS-7",
+          "OBS-9"
+        ],
+        "contradicting": [
+          "OBS-10",
+          "OBS-6"
+        ],
+        "assumptions": [
+          "ASM-3",
+          "ASM-4"
+        ],
+        "predictions": [
+          "Edge‑gateway request‑rate metrics would show a spike at ~10:12‑10:13.",
+          "Redis‑cache hit‑rate would drop sharply at the same time."
+        ],
+        "confidence": 0.35,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.35,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "postgres-orders",
+          "category": "code_regression",
+          "trigger": null
+        },
+        "mechanism": "An automatic ANALYZE updated planner statistics, causing the positions query to choose a sequential scan instead of an index scan, inflating latency to ~1.8 s and cascading into connection‑pool exhaustion.",
+        "supporting": [
+          "OBS-3",
+          "OBS-7"
+        ],
+        "contradicting": [
+          "OBS-8",
+          "OBS-10"
+        ],
+        "assumptions": [
+          "ASM-5"
+        ],
+        "predictions": [
+          "pg_stat_statements will show a plan change (seq scan) after 10:13.",
+          "Running ANALYZE manually will revert to the faster plan."
+        ],
+        "confidence": 0.2,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.2,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "auth-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "Downstream DB overload caused portfolio‑service to return 5xx; edge‑gateway retries auth calls, which time out, forcing users to log in again.",
+        "supporting": [],
+        "contradicting": [
+          "OBS-2",
+          "OBS-4"
+        ],
+        "assumptions": [
+          "ASM-6"
+        ],
+        "predictions": [
+          "Auth‑service logs would show increased 5xx/timeout errors coincident with portfolio errors."
+        ],
+        "confidence": 0.1,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.1,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "portfolio‑service logs start showing “cache miss for positions:<account>; loading from postgres‑orders” at 10:13:01 UTC (1 604 occurrences).",
+      "artifacts": [
+        "log:4c3c36a1bb07"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "portfolio‑service logs “query on postgres‑orders timed out after 2000 ms” from 10:16:01 UTC (496 occurrences).",
+      "artifacts": [
+        "log:1b4046047da5"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "postgres‑orders logs show the positions query taking ~1.8 s from 10:14:01 UTC (1 050 occurrences).",
+      "artifacts": [
+        "log:d9900d4bc11e"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "postgres‑orders emits “FATAL: remaining connection slots are reserved for non‑replication superuser connections” from 10:16:25 UTC (302 occurrences).",
+      "artifacts": [
+        "log:e1265c62e747"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "postgres‑orders warns “checkpoints are occurring too frequently (≈28 s apart)” already at 09:33 UTC (3 occurrences).",
+      "artifacts": [
+        "log:5dc98c9be4d4"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "orders‑service reports a few slow queries on the orders table (≈223 ms) between 09:51‑10:20 UTC.",
+      "artifacts": [
+        "log:3d03e926d542"
+      ],
+      "service": "orders-service",
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "Metrics for postgres‑orders (09:28‑10:40) vs baseline: cpu_util mean 0.58 (baseline 0.34), last 0.95; active_connections mean 118 (baseline 73), last 175; query_latency_p99_ms mean 330 ms (baseline 17.5 ms), last 1 067 ms; replication_lag_s slight rise.",
+      "artifacts": [
+        "metric:postgres-orders/cpu_util",
+        "metric:postgres-orders/active_connections",
+        "metric:postgres-orders/query_latency_p99_ms",
+        "metric:postgres-orders/replication_lag_s"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-7",
+      "source": "investigate"
+    },
+    {
+      "statement": "Config change on postgres‑orders at 09:31:44 UTC raising work_mem from 4 MiB to 8 MiB (reload).",
+      "artifacts": [
+        "chg:2519"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-8",
+      "source": "investigate"
+    },
+    {
+      "statement": "Dependency graph shows portfolio‑service → postgres‑orders (SQL, hard, 2 s timeout) and orders‑service → postgres‑orders (SQL, hard, 2 s timeout).",
+      "artifacts": [
+        "dep:portfolio-service->postgres-orders",
+        "dep:orders-service->postgres-orders"
+      ],
+      "service": null,
+      "id": "OBS-9",
+      "source": "investigate"
+    },
+    {
+      "statement": "No other deploys, feature‑flag changes, secret rotations or infra work for the four services in the 08:00‑10:40 window.",
+      "artifacts": [
+        "chg:2519"
+      ],
+      "service": null,
+      "id": "OBS-10",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "work_mem reload applies instantly to all new backend processes.",
+      "reason": "PostgreSQL documentation states SET work_mem via ALTER SYSTEM + reload affects new sessions.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "The 4 MiB → 8 MiB increase raises per‑query memory enough to hit the max_connections memory ceiling under observed concurrency.",
+      "reason": "Higher work_mem increases sort/hash memory; with ~175 concurrent connections total memory can exceed limits.",
+      "id": "ASM-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Portfolio‑service cache‑miss rate is driven primarily by external request volume, not by DB latency.",
+      "reason": "Cache misses appear exactly when DB latency spikes; without request‑rate data we assume traffic surge.",
+      "id": "ASM-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "Connection pool sizes for portfolio‑service and orders‑service are static (≈150‑200).",
+      "reason": "Typical pool configs are fixed; no config change observed.",
+      "id": "ASM-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "An automatic ANALYZE or planner statistics update could have occurred just before 10:13, producing a worse plan for the positions query.",
+      "reason": "Autovacuum runs periodically and is not captured in change history.",
+      "id": "ASM-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "Forced log‑outs are a downstream symptom of portfolio‑service failures, not a primary auth‑service problem.",
+      "reason": "No auth‑service or edge‑gateway errors observed; session validation likely fails after portfolio 5xx.",
+      "id": "ASM-6",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_metrics",
+      "scope": "portfolio-service request rate, error rate, latency (p99) 09:30‑10:40",
+      "reason": "Metric not available in current dataset; needed to confirm traffic surge.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "edge-gateway and auth-service WARN/ERROR logs 09:30‑10:40",
+      "reason": "No logs retrieved for these services; needed to verify auth cascade.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "PostgreSQL runtime settings (max_connections, shared_buffers, work_mem) and memory usage breakdown",
+      "reason": "Configuration details not captured; required to quantify memory pressure.",
+      "id": "GAP-3",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "PostgreSQL pg_stat_activity / pg_stat_statements snapshots around 10:13‑10:20",
+      "reason": "Would reveal exact query plans and confirm planner regression.",
+      "id": "GAP-4",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "redis-cache hit‑rate, evictions, memory 09:30‑10:40",
+      "reason": "Cache behavior not observed; needed to understand cache‑miss driver.",
+      "id": "GAP-5",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Rollback postgres‑orders work_mem to 4 MiB (or lower) and reload.",
+      "rationale": "Config change (chg:2519) correlates with latency and connection surge; removing it should reduce memory pressure immediately.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Increase max_connections on postgres‑orders or add a read replica and route portfolio‑service position reads to it.",
+      "rationale": "Connection pool exhaustion (F4) is a direct symptom; more slots or a replica provides headroom.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Enable log_min_duration_statement = 500 on postgres‑orders temporarily to capture exact query plans for the positions query.",
+      "rationale": "Will confirm whether the plan changed after the config change or due to statistics drift (H3).",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "fix",
+      "description": "Run ANALYZE on the positions table and verify index on account_id is used.",
+      "rationale": "If planner regression (H3) contributed, fresh stats may restore optimal plan.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add portfolio‑service request‑rate and cache‑hit‑rate metrics with alerts on sudden cache‑miss spikes.",
+      "rationale": "Early detection of traffic surges (H2) before they saturate the DB.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Review all recent PostgreSQL config changes (including checkpoint settings) and conduct capacity‑planning exercise.",
+      "rationale": "Pre‑existing checkpoint pressure (F5) indicates the system was near a limit; systematic review avoids repeat.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Did a traffic surge actually occur at ~10:12‑10:13? (missing portfolio‑service request‑rate metrics)",
+    "What is the exact memory impact of the work_mem increase given current max_connections and shared_buffers?",
+    "Did an automatic ANALYZE run just before 10:13, changing the positions query plan?",
+    "Why were users logged out – is there an auth‑service error path not captured in logs?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 6,
+    "tool_calls": 6,
+    "tokens": 44593,
+    "elapsed_s": 225.45
+  }
+}

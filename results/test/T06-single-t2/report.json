@@ -1,0 +1,348 @@
+{
+  "incident_id": "T06",
+  "title": "Intermittent errors across the app",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "Starting at ~11:15 UTC the edge‑gateway error rate jumped from ~0.2 % to ~2 % and its p99 latency rose sharply. Gateway logs show thousands of “connection timeout to portfolio‑service” errors. Portfolio‑service logs show a matching burst of gRPC “UNAVAILABLE (connection reset)” failures when calling market‑data‑service, yet market‑data‑service’s own error rate and latency stay at baseline. The only code change in the window is the orders‑service v2.16.0 deploy at 11:05, which correlates with a modest rise in orders‑service error rate but does not explain the gateway timeouts to portfolio‑service. The evidence points to a degradation in the portfolio‑service → market‑data‑service path (likely a transient network or downstream issue) that stalls portfolio‑service, causing gateway timeouts and the observed 2 % error spike.",
+  "root_cause": {
+    "service": "portfolio-service",
+    "category": "dependency_degradation",
+    "trigger": null
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "portfolio-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "Portfolio‑service gRPC calls to market‑data‑service start failing (connection resets). Portfolio‑service blocks or retries, exceeding the gateway's 3 s timeout, so edge‑gateway returns 502/timeout errors. The gateway error spike is a symptom of the downstream stall.",
+        "supporting": [
+          "OBS-7",
+          "OBS-8"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-9"
+        ],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "Increasing the gateway timeout for portfolio‑service should reduce 502s",
+          "Direct calls to market‑data‑service from a test client would show intermittent resets"
+        ],
+        "confidence": 0.55,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.55,
+      "calibration": [],
+      "confidence_band": "medium",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "code_regression",
+          "trigger": "chg:2561"
+        },
+        "mechanism": "The v2.16.0 deploy introduced a bug that raises orders‑service error rate; edge‑gateway also calls orders‑service (hard dependency, 3 s timeout) so some gateway errors could stem from orders‑service latency/errors.",
+        "supporting": [
+          "OBS-3",
+          "OBS-10"
+        ],
+        "contradicting": [
+          "OBS-7",
+          "OBS-2"
+        ],
+        "assumptions": [
+          "ASM-3"
+        ],
+        "predictions": [
+          "Rolling back orders‑service to v2.15.2 would bring its error rate back to baseline",
+          "Gateway error breakdown would show a fraction of timeouts to orders‑service"
+        ],
+        "confidence": 0.35,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.35,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "network",
+          "category": "infrastructure_failure",
+          "trigger": null
+        },
+        "mechanism": "A brief network disruption (e.g., packet loss or routing flap) affects the specific VPC links between gateway↔portfolio‑service and portfolio‑service↔market‑data‑service, causing connection resets and timeouts while other paths stay healthy.",
+        "supporting": [
+          "OBS-7",
+          "OBS-8"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-4",
+          "OBS-5"
+        ],
+        "assumptions": [
+          "ASM-4"
+        ],
+        "predictions": [
+          "Network flow logs or VPC flow metrics would show increased retransmits on those ENIs at 11:15‑11:30",
+          "Other services sharing the same subnet would not be affected"
+        ],
+        "confidence": 0.3,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.3,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "unknown",
+          "category": "unknown",
+          "trigger": null
+        },
+        "mechanism": "The observed pattern could be a client‑side or reporting artifact; insufficient data to pinpoint a single internal cause.",
+        "supporting": [],
+        "contradicting": [
+          "OBS-1",
+          "OBS-7",
+          "OBS-8"
+        ],
+        "assumptions": [],
+        "predictions": [],
+        "confidence": 0.1,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.1,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "edge‑gateway error_rate baseline ≈0.002, spikes to 0.018‑0.023 beginning at 11:15 UTC",
+      "artifacts": [
+        "metric:edge-gateway/error_rate"
+      ],
+      "service": null,
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "edge‑gateway latency_p99 rises from ~342 ms baseline to 500‑590 ms starting at 11:15 UTC",
+      "artifacts": [
+        "metric:edge-gateway/latency_p99_ms"
+      ],
+      "service": null,
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "orders‑service error_rate baseline ≈0.0018, rises to 0.006‑0.009 from 11:15 UTC",
+      "artifacts": [
+        "metric:orders-service/error_rate"
+      ],
+      "service": null,
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "portfolio‑service error_rate remains at baseline (~0.002) throughout the window",
+      "artifacts": [
+        "metric:portfolio-service/error_rate"
+      ],
+      "service": null,
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "payments‑service error_rate stays at baseline (~0.002) throughout the window",
+      "artifacts": [
+        "metric:payments-service/error_rate"
+      ],
+      "service": null,
+      "id": "OBS-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "market‑data‑service error_rate stays at baseline (~0.0019) throughout the window",
+      "artifacts": [
+        "metric:market-data-service/error_rate"
+      ],
+      "service": null,
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "edge‑gateway logs show 619 “upstream connect error … connection timeout to portfolio‑service” errors starting 11:15:01 UTC",
+      "artifacts": [
+        "log:80f1f968cbad"
+      ],
+      "service": null,
+      "id": "OBS-7",
+      "source": "investigate"
+    },
+    {
+      "statement": "portfolio‑service logs show 78 “gRPC call to market‑data‑service failed: UNAVAILABLE (connection reset)” warnings starting 11:15:13 UTC",
+      "artifacts": [
+        "log:e0364bef1b6f"
+      ],
+      "service": null,
+      "id": "OBS-8",
+      "source": "investigate"
+    },
+    {
+      "statement": "portfolio‑service latency_p99 shows no sustained increase (remains ~400‑500 ms)",
+      "artifacts": [
+        "metric:portfolio-service/latency_p99_ms"
+      ],
+      "service": null,
+      "id": "OBS-9",
+      "source": "investigate"
+    },
+    {
+      "statement": "Only change in the 45‑minute window is orders‑service deploy v2.16.0 at 11:05:12 UTC (chg:2561)",
+      "artifacts": [
+        "chg:2561"
+      ],
+      "service": null,
+      "id": "OBS-10",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "Gateway timeouts to portfolio‑service indicate portfolio‑service is not responding within the 3 s gateway timeout",
+      "reason": "Gateway logs report connection timeout to portfolio‑service; gateway timeout for that dependency is 3000 ms (dep:edge-gateway->portfolio-service)",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "Portfolio‑service stalls because its gRPC calls to market‑data‑service are failing (connection reset)",
+      "reason": "Portfolio‑service logs show repeated UNAVAILABLE gRPC failures to market‑data‑service at the same time as gateway timeouts",
+      "id": "ASM-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Orders‑service v2.16.0 introduced a regression that raises its own error rate",
+      "reason": "Error rate rise in orders‑service aligns with deploy time; no other changes",
+      "id": "ASM-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "A transient network issue could selectively affect the portfolio‑service ↔ market‑data‑service and gateway ↔ portfolio‑service paths",
+      "reason": "Both paths show connection resets at the same moment while other services remain healthy",
+      "id": "ASM-4",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_logs",
+      "scope": "orders-service, market-data-service (WARN+)",
+      "reason": "Logs for these services were not retrieved; they could reveal errors or retries that explain the orders‑service error rise or confirm market‑data‑service health.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "per‑minute granularity for error_rate and latency on all services",
+      "reason": "Current step is 3 minutes; finer granularity would pinpoint exact onset minute for each service.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "network / VPC flow logs or cloud provider network health metrics",
+      "reason": "No network‑level evidence collected; needed to validate hypothesis H3.",
+      "id": "GAP-3",
+      "source": "investigate"
+    },
+    {
+      "tool": "search_incident_history",
+      "scope": "past incidents involving portfolio‑service ↔ market‑data‑service gRPC failures",
+      "reason": "Analogous incidents could inform whether this is a known failure mode.",
+      "id": "GAP-4",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Raise edge‑gateway timeout for portfolio‑service (e.g., from 3 s to 5 s) and enable a circuit‑breaker fallback to serve stale portfolio data.",
+      "rationale": "Immediately reduces 502 responses while root cause is investigated (addresses symptom F7).",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Enable distributed tracing for the gateway → portfolio‑service → market‑data‑service path and capture gRPC status codes.",
+      "rationale": "Will confirm whether portfolio‑service stalls on market‑data‑service calls (supports H1).",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Review network flow logs / VPC metrics for the ENIs used by portfolio‑service and gateway during 11:15‑11:30.",
+      "rationale": "Tests the infrastructure‑failure hypothesis (H3).",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "fix",
+      "description": "If tracing shows market‑data‑service gRPC resets, work with market‑data team to harden the gRPC server (connection pooling, health checks) and add retry/back‑off in portfolio‑service.",
+      "rationale": "Addresses the dependency degradation root cause (H1).",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add canary deployment and automated error‑rate alerts for orders‑service to catch regressions like v2.16.0 earlier.",
+      "rationale": "Mitigates future code‑regression risk (H2).",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "What exact gRPC error codes does market‑data‑service return during the failure window?",
+    "Do VPC flow logs show packet loss or latency spikes on the specific subnet links at 11:15‑11:30?",
+    "Why does portfolio‑service error_rate stay at baseline while its upstream calls fail?",
+    "Is the orders‑service error increase purely coincidental or does it contribute to any gateway errors not captured in the timeout logs?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 13,
+    "tool_calls": 12,
+    "tokens": 116103,
+    "elapsed_s": 498.81
+  }
+}

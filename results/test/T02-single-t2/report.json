@@ -1,0 +1,354 @@
+{
+  "incident_id": "T02",
+  "title": "Portfolio pages slow and failing",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "Starting ~14:41 UTC the external quotes‑vendor began responding slower than the 800 ms hard timeout configured in market‑data‑service. This caused market‑data‑service to time‑out and return errors to portfolio‑service, which then hit its 500 ms gRPC deadline and surfaced DEADLINE_EXCEEDED errors. Edge‑gateway subsequently timed out on its 3 s upstream call to portfolio‑service, producing the observed 5xx responses and high p99 latency on /v1/portfolio. A deploy of portfolio‑service v5.4.0 at 14:48 UTC added a sector‑breakdown feature that increased call volume to market‑data‑service and generated “sector mapping missing” warnings, worsening the symptom after onset but not causing it.",
+  "root_cause": {
+    "service": "quotes-vendor",
+    "category": "dependency_degradation",
+    "trigger": null
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "quotes-vendor",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "Vendor latency exceeds the 800 ms hard timeout, causing market‑data‑service to return errors, which cascade to portfolio‑service (500 ms gRPC deadline) and finally to edge‑gateway (3 s upstream timeout).",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-8"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "Vendor‑side latency metrics would show >800 ms during 14:41‑15:05",
+          "Market‑data‑service circuit‑breaker stays half‑open"
+        ],
+        "confidence": 0.88,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.88,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "portfolio-service",
+          "category": "code_regression",
+          "trigger": "chg:2512"
+        },
+        "mechanism": "New sector‑breakdown feature increases outbound gRPC calls to market‑data‑service, amplifying load and causing time‑outs.",
+        "supporting": [
+          "OBS-6",
+          "OBS-9"
+        ],
+        "contradicting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-3",
+          "OBS-4"
+        ],
+        "assumptions": [
+          "ASM-3",
+          "ASM-4"
+        ],
+        "predictions": [
+          "Rolling back v5.4.0 would immediately reduce error rate"
+        ],
+        "confidence": 0.22,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.22,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "resource_exhaustion",
+          "trigger": null
+        },
+        "mechanism": "Internal saturation (thread‑pool, GC) in market‑data‑service leads to slower responses to quotes‑vendor, manifesting as vendor time‑outs.",
+        "supporting": [
+          "OBS-2"
+        ],
+        "contradicting": [
+          "OBS-5"
+        ],
+        "assumptions": [
+          "ASM-5"
+        ],
+        "predictions": [
+          "Market‑data‑service CPU/memory would show spikes"
+        ],
+        "confidence": 0.1,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.1,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "network",
+          "category": "infrastructure_failure",
+          "trigger": null
+        },
+        "mechanism": "Network latency or packet loss between market‑data‑service and quotes‑vendor causes the 800 ms timeout.",
+        "supporting": [
+          "OBS-2"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-6"
+        ],
+        "predictions": [
+          "Other outbound calls from market‑data‑service would also time‑out"
+        ],
+        "confidence": 0.08,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.08,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "Portfolio‑service starts returning gRPC DEADLINE_EXCEEDED to market‑data‑service at 14:42 UTC (679 occurrences).",
+      "artifacts": [
+        "log:3096c4afe74b"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "Market‑data‑service logs show quotes‑vendor request time‑outs (800 ms) from 14:41 UTC (1 072 occurrences) and circuit‑breaker half‑open from 14:47 UTC.",
+      "artifacts": [
+        "log:785c94c54006",
+        "log:a9fa5c6b6926"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Edge‑gateway reports upstream portfolio‑service time‑outs (3 s) from 14:43 UTC (300 occurrences).",
+      "artifacts": [
+        "log:5eba6c3c8e7a"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "Portfolio‑service error‑rate jumps from ~0.2 % baseline to >5 % and p99 latency rises from ~415 ms to >3 s during the same window.",
+      "artifacts": [
+        "metric:portfolio-service/error_rate",
+        "metric:portfolio-service/latency_p99_ms"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "CPU and memory on portfolio‑service remain flat (~0.51 CPU, 0.55 mem) – no resource saturation.",
+      "artifacts": [
+        "metric:portfolio-service/cpu_util",
+        "metric:portfolio-service/mem_util"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "Only production change in the window is a deploy of portfolio‑service v5.4.0 at 14:48:30 UTC (after the first errors).",
+      "artifacts": [
+        "chg:2512"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "Dependency time‑outs: market‑data‑service→quotes‑vendor 800 ms (hard), portfolio‑service→market‑data‑service 500 ms (hard), edge‑gateway→portfolio‑service 3 s (hard).",
+      "artifacts": [
+        "dep:market-data-service->quotes-vendor",
+        "dep:portfolio-service->market-data-service",
+        "dep:edge-gateway->portfolio-service"
+      ],
+      "service": null,
+      "id": "OBS-8",
+      "source": "investigate"
+    },
+    {
+      "statement": "“Sector mapping missing” warnings appear in portfolio‑service from 14:49 UTC (after the deploy).",
+      "artifacts": [
+        "log:e481388daa5a"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-9",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "Market‑data‑service enforces the 800 ms hard timeout to quotes‑vendor as defined in the dependency graph.",
+      "reason": "Dependency graph lists a hard timeout of 800 ms for that edge.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "Change‑history capture is complete for the window (no hidden config/feature‑flag changes).",
+      "reason": "get_change_history returned only the portfolio‑service deploy.",
+      "id": "ASM-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "The v5.4.0 deploy adds a code path that calls market‑data‑service more often (sector breakdown).",
+      "reason": "Deploy summary mentions adding sector breakdown to performance page.",
+      "id": "ASM-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "Deploy effects are immediate; no rolling‑restart delay.",
+      "reason": "Standard CI deploy rolls out instantly.",
+      "id": "ASM-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "If market‑data‑service were resource‑exhausted, its own CPU/memory metrics would show a rise.",
+      "reason": "Resource exhaustion typically manifests in host metrics.",
+      "id": "ASM-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "A network problem would be visible to other services using the same egress path; none reported.",
+      "reason": "No other services logged similar time‑outs.",
+      "id": "ASM-6",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_metrics",
+      "scope": "quotes-vendor latency and error rate",
+      "reason": "External vendor not instrumented in our metrics platform",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "market-data-service CPU, memory, thread‑pool, GC",
+      "reason": "Not queried; would confirm or rule out resource exhaustion",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "market-data-service config/feature‑flag changes",
+      "reason": "Change history may miss non‑deploy changes",
+      "id": "GAP-3",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "distributed trace of a portfolio request (edge‑gateway → portfolio → market‑data → vendor)",
+      "reason": "Tracing infrastructure not available via current tools",
+      "id": "GAP-4",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Add a circuit‑breaker / fallback in portfolio‑service for market‑data‑service calls (serve stale cached quotes).",
+      "rationale": "Prevents cascade to edge‑gateway while vendor is slow.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Increase portfolio‑service → market‑data‑service gRPC timeout from 500 ms to ~800 ms and enable retry with back‑off (if idempotent).",
+      "rationale": "Aligns timeout budget with vendor timeout, giving more headroom.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Engage quotes‑vendor with observed timeout pattern (800 ms) and request status / SLA review.",
+      "rationale": "External root cause needs vendor remediation.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "fix",
+      "description": "Roll back portfolio‑service v5.4.0 or disable the new sector‑breakdown feature flag.",
+      "rationale": "Deploy added load after onset; rollback reduces pressure on market‑data‑service.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add synthetic health‑checks that hit the full chain (edge‑gateway → portfolio → market‑data → vendor) and surface per‑hop latency.",
+      "rationale": "Guarantees visibility of future vendor‑side problems.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Document the timeout budget (vendor 800 ms → market‑data 500 ms → portfolio 3 s) and enforce a timeout‑budget policy for new features.",
+      "rationale": "Prevents future features from unintentionally tightening the chain.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "What is the current SLA / typical latency of quotes‑vendor? (Needed to judge whether 800 ms timeout is appropriate.)",
+    "Did market‑data‑service experience any GC pauses or thread‑pool exhaustion during 14:40‑15:05? (Metrics not collected; could rule out H3.)",
+    "Is there a feature‑flag to disable the new sector‑breakdown without a full rollback? (Would allow quick mitigation.)",
+    "Are there other downstream callers of market‑data‑service that showed errors? (Would indicate broader impact of vendor slowdown.)"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 8,
+    "tool_calls": 6,
+    "tokens": 53566,
+    "elapsed_s": 301.23
+  }
+}

@@ -1,0 +1,342 @@
+{
+  "incident_id": "T05",
+  "title": "Nobody can log in",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "At 06:00 UTC the TLS certificate used by auth‑service expired (notAfter 2026‑10‑09T06:00:00Z). edge‑gateway has a hard HTTP‑TLS dependency on auth‑service, so every login/token‑refresh request (POST /v1/session) began failing with TLS handshake errors, producing a >10 % error‑rate on the gateway. The gateway config change at 05:52 (keep‑alive timeout) is unrelated.",
+  "root_cause": {
+    "service": "auth-service",
+    "category": "certificate_or_credential",
+    "trigger": null
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "auth-service",
+          "category": "certificate_or_credential",
+          "trigger": null
+        },
+        "mechanism": "The TLS certificate presented by auth‑service expired at 06:00 UTC. edge‑gateway, which requires a valid TLS handshake for its hard dependency, immediately began failing every request to auth‑service, resulting in 5xx on /v1/session and a spike in gateway error‑rate.",
+        "supporting": [
+          "OBS-1",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "Replacing the expired certificate on auth‑service will eliminate the TLS handshake errors.",
+          "edge‑gateway error‑rate will return to baseline (<0.5 %) after cert replacement."
+        ],
+        "confidence": 0.94,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.94,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "edge-gateway",
+          "category": "config_change",
+          "trigger": "chg:2541"
+        },
+        "mechanism": "The keep‑alive timeout increase caused downstream connections to stay open longer, leading to timeouts that manifest as 5xx on session routes.",
+        "supporting": [
+          "OBS-2"
+        ],
+        "contradicting": [
+          "OBS-3",
+          "OBS-4",
+          "OBS-5"
+        ],
+        "assumptions": [
+          "ASM-3"
+        ],
+        "predictions": [
+          "Reverting the keep‑alive change would restore login success without touching certificates."
+        ],
+        "confidence": 0.04,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.04,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "auth-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "auth‑service became unhealthy (e.g., process crash) despite passing health checks, causing gateway failures.",
+        "supporting": [
+          "OBS-1"
+        ],
+        "contradicting": [
+          "OBS-3",
+          "OBS-4",
+          "OBS-7"
+        ],
+        "assumptions": [
+          "ASM-4"
+        ],
+        "predictions": [
+          "auth‑service logs would show crash or OOM events around 06:00."
+        ],
+        "confidence": 0.01,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.01,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "infrastructure",
+          "category": "infrastructure_failure",
+          "trigger": null
+        },
+        "mechanism": "A network‑level TLS interception or certificate validation change broke the handshake for all callers.",
+        "supporting": [
+          "OBS-3",
+          "OBS-4"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-5"
+        ],
+        "assumptions": [
+          "ASM-5"
+        ],
+        "predictions": [
+          "Other services calling auth‑service over TLS would also see failures."
+        ],
+        "confidence": 0.01,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.01,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "edge‑gateway calls auth‑service over HTTP with a hard dependency (timeout 1 s).",
+      "artifacts": [
+        "dep:edge-gateway->auth-service"
+      ],
+      "service": null,
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "A config change on edge‑gateway at 05:52:30 UTC raised upstream keep‑alive timeout from 60 s to 75 s.",
+      "artifacts": [
+        "chg:2541"
+      ],
+      "service": null,
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "From 06:00:09 UTC edge‑gateway logs show 1 428 TLS handshake failures: “certificate has expired or is not yet valid (notAfter 2026‑10‑09T06:00:00Z)”.",
+      "artifacts": [
+        "log:6a1c72fa74da"
+      ],
+      "service": null,
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "auth‑service logs show matching peer errors “remote error: tls: bad certificate” from 06:00:06 UTC onward (1 112 occurrences).",
+      "artifacts": [
+        "log:be1de505ee3a"
+      ],
+      "service": null,
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "edge‑gateway error‑rate jumps from a baseline 0.2 % to a mean 7.3 % (last 11.6 % at 06:30).",
+      "artifacts": [
+        "metric:edge-gateway/error_rate"
+      ],
+      "service": null,
+      "id": "OBS-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "No secret‑rotation, deploy, or other config changes for auth‑service or edge‑gateway in the 05:00‑07:00 window (only chg:2541).",
+      "artifacts": [
+        "chg:2541"
+      ],
+      "service": null,
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "Responder notes that auth‑service pods are up and health checks pass.",
+      "artifacts": [
+        "log:be1de505ee3a"
+      ],
+      "service": null,
+      "id": "OBS-7",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The “notAfter 2026‑10‑09T06:00:00Z” timestamp in the TLS error accurately reflects the certificate’s expiry time.",
+      "reason": "Log line directly includes the notAfter field; no contradictory evidence.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "No hidden secret‑rotation or certificate‑renewal job occurred that the change‑history API missed.",
+      "reason": "Change‑history query returned only the gateway config change; tool does not surface cert rotations.",
+      "id": "ASM-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Raising the gateway keep‑alive timeout cannot cause TLS handshake failures.",
+      "reason": "Keep‑alive affects connection reuse, not certificate validation; error logs show cert expiry.",
+      "id": "ASM-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "Health‑check endpoint for auth‑service does not validate the TLS server certificate.",
+      "reason": "Pods report healthy while TLS handshakes fail; typical health checks are HTTP GET on a non‑TLS path.",
+      "id": "ASM-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "No infrastructure change (network policy, TLS termination) occurred in the window.",
+      "reason": "Change‑history shows none; both services report the same cert‑expiry message.",
+      "id": "ASM-5",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_logs",
+      "scope": "AZ‑b pods for edge‑gateway and auth‑service",
+      "reason": "Log shard for AZ‑b unavailable; results exclude those pods.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Certificate rotation jobs for auth‑service",
+      "reason": "Change‑history API does not surface secret/cert rotation events; cannot confirm if a rotation was attempted.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "auth‑service TLS handshake success/failure counters",
+      "reason": "No metric series exposed for TLS handshake outcome; only gateway error‑rate available.",
+      "id": "GAP-3",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "service=edge-gateway, start=2026-10-09T05:45:00Z, end=2026-10-09T06:30:00Z",
+      "reason": "log shard for az-b is unavailable; results exclude pods in az-b",
+      "id": "GAP-4",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "service=auth-service, start=2026-10-09T05:45:00Z, end=2026-10-09T06:30:00Z",
+      "reason": "log shard for az-b is unavailable; results exclude pods in az-b",
+      "id": "GAP-5",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "fix",
+      "description": "Replace the expired TLS certificate on auth‑service and restart affected pods.",
+      "rationale": "Directly eliminates the handshake failure identified as root cause (H1).",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Validate that edge‑gateway logs no longer show TLS handshake errors and that POST /v1/session returns 200 for test accounts.",
+      "rationale": "Confirms the fix propagates through the hard dependency.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add certificate‑expiry monitoring alerts (30‑day, 7‑day, 1‑day) for all identity‑service certificates.",
+      "rationale": "Prevents future time‑based expirations from causing outages.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Automate certificate rotation (e.g., cert‑manager or secret‑rotation pipeline) so no manual step is required.",
+      "rationale": "Removes human‑process gap that allowed the cert to expire.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Extend auth‑service health check to perform a TLS handshake or verify cert notAfter > now.",
+      "rationale": "Makes future cert expirations visible to the health‑check system.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Ensure secret/cert rotation events are recorded in the change‑history feed.",
+      "rationale": "Closes visibility gap (G2) for future investigations.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Why was the certificate not rotated automatically before expiry?",
+    "Did any pods in AZ‑b behave differently (logs missing)?",
+    "Are there other downstream services that call auth‑service over TLS and may have silently failed?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 8,
+    "tool_calls": 6,
+    "tokens": 48918,
+    "elapsed_s": 372.96
+  }
+}

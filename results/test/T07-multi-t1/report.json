@@ -1,0 +1,670 @@
+{
+  "incident_id": "T07",
+  "title": "Trade confirmation emails delayed",
+  "outcome": "inconclusive",
+  "outcome_reasons": [
+    "HYP-1 has unresolved blocking objections"
+  ],
+  "summary": "Trade confirmation emails began arriving 20+ minutes late shortly after market open. The only change in the window was the deployment of notification‑service v3.9.0 at 13:12 UTC, which introduced a new SMTP client library and began emitting a continuous deprecation warning for `smtp.pool_size`. Consumer lag stayed at baseline until ~13:30 UTC, then exploded to >170k messages while CPU rose to near‑saturation; error rate and request latency remained flat. Three hypotheses were examined (code regression, external relay throttling, CPU‑intensive TLS handshake), but each has blocking objections—critical claims lack supporting metrics or logs, and key evidence (per‑instance SMTP latency, relay‑side metrics, actual pool‑size values, async vs sync send path) is missing. Consequently the investigation was stopped as inconclusive after two rounds.",
+  "root_cause": null,
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "code_regression",
+          "trigger": "chg:2571"
+        },
+        "mechanism": "The v3.9.0 deploy introduced a new SMTP client library. The deprecated config key `smtp.pool_size` is still read, yielding a too‑small connection pool. Email sends are performed synchronously on the Kafka consumer thread, so each send blocks the consumer, causing consumer lag to explode, CPU to rise, and emails to be delayed.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-6",
+          "OBS-9",
+          "OBS-10",
+          "OBS-11",
+          "OBS-12",
+          "OBS-13",
+          "OBS-14",
+          "OBS-15"
+        ],
+        "contradicting": [
+          "OBS-7",
+          "OBS-8",
+          "OBS-16",
+          "OBS-17",
+          "OBS-31",
+          "OBS-32"
+        ],
+        "assumptions": [
+          "ASM-6",
+          "ASM-7",
+          "ASM-8"
+        ],
+        "predictions": [
+          "Per‑instance SMTP send latency will show a step increase at 13:12 UTC.",
+          "Rolling back to v3.8.4 will immediately restore normal consumer lag."
+        ],
+        "confidence": 0.66,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.5,
+      "calibration": [
+        "it has unresolved blocking objections"
+      ],
+      "confidence_band": "medium",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "Claims that email sends are performed synchronously on the Kafka consumer thread and that the deprecated `smtp.pool_size` results in an undersized pool; neither claim is backed by logs, metrics or change history.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "HYP-2 (external SMTP relay throttling) offers a plausible competing explanation and has not been ruled out. (not blocking: this review rejected HYP-2 or found it flawed)",
+          "alternative": "HYP-2",
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "gap_unaddressed",
+          "severity": "blocking",
+          "detail": "Missing per‑instance SMTP send latency / outbound queue metrics and the actual numeric values of `smtp.pool_size` / `smtp.max_connections` at deploy time.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "dependency_degradation",
+          "trigger": "chg:2571"
+        },
+        "mechanism": "The new SMTP client library is functionally correct, but the external SMTP relay begins throttling/deferring at 13:18 (first “deferred” warning). Because the client still sends synchronously on the consumer thread, each deferral blocks the thread, causing the lag explosion at ~13:32 and the CPU rise.",
+        "supporting": [
+          "OBS-9",
+          "OBS-13",
+          "OBS-4",
+          "OBS-14",
+          "OBS-5",
+          "OBS-12",
+          "OBS-6",
+          "OBS-15",
+          "OBS-30"
+        ],
+        "contradicting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-3",
+          "OBS-10",
+          "OBS-11",
+          "OBS-27"
+        ],
+        "assumptions": [
+          "ASM-9",
+          "ASM-10",
+          "ASM-11"
+        ],
+        "predictions": [
+          "SMTP relay logs will show rate‑limit or deferral codes starting at 13:18 UTC.",
+          "Relay‑side metrics will show a spike in queued/deferred mail at that time."
+        ],
+        "confidence": 0.22,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.22,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "Asserts that the external SMTP relay began throttling at 13:18 and that each deferral blocks the consumer thread; relay‑side logs or metrics are not available.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "HYP-1 (code regression due to pool‑size misconfiguration) remains a viable cause and has not been excluded. (not blocking: this review rejected HYP-1 or found it flawed)",
+          "alternative": "HYP-1",
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "resource_exhaustion",
+          "trigger": "chg:2571"
+        },
+        "mechanism": "The new SMTP client library is CPU‑intensive (e.g., performs a full TLS handshake per message), driving CPU to saturation. The consumer thread spends most cycles in the client, so lag grows and mail is delayed.",
+        "supporting": [
+          "OBS-6",
+          "OBS-15",
+          "OBS-30",
+          "OBS-4",
+          "OBS-14",
+          "OBS-5",
+          "OBS-12"
+        ],
+        "contradicting": [
+          "OBS-7",
+          "OBS-8",
+          "OBS-16",
+          "OBS-17",
+          "OBS-31",
+          "OBS-32",
+          "OBS-3",
+          "OBS-11",
+          "OBS-27"
+        ],
+        "assumptions": [
+          "ASM-12",
+          "ASM-13"
+        ],
+        "predictions": [
+          "GC pause metrics or thread‑pool queue length would show a sharp rise at deploy time.",
+          "Profiling would reveal TLS handshake or similar heavy work per outbound email."
+        ],
+        "confidence": 0.12,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.12,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "Claims the new client performs a full TLS handshake per message, driving CPU to saturation; no GC‑pause, thread‑pool queue or TLS‑latency metrics support this.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "ignores_contradiction",
+          "severity": "minor",
+          "detail": "Error rate and request latency stay at baseline while the hypothesis predicts a systemic slowdown that would likely surface in those metrics.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "Both HYP-1 and HYP-2 remain plausible and have not been ruled out. (not blocking: this review rejected HYP-1 or found it flawed)",
+          "alternative": "HYP-1",
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "deploy on notification-service at 13:12:40 UTC by ci/deploy-bot: notification-service v3.9.0: switch to new SMTP client library (version: 3.9.0, previous_version: 3.8.4, commit: d1e07b9, diff: +530 / -470)",
+      "artifacts": [
+        "chg:2571"
+      ],
+      "service": "notification-service",
+      "id": "OBS-1",
+      "source": "change-census"
+    },
+    {
+      "statement": "notification-service v3.9.0 was deployed at 13:12:40 UTC (change chg:2571).",
+      "artifacts": [
+        "chg:2571"
+      ],
+      "service": "notification-service",
+      "id": "OBS-2",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "WARN log “config key smtp.pool_size is deprecated; use smtp.max_connections” begins at 13:13:16 UTC and recurs continuously (413 occurrences).",
+      "artifacts": [
+        "log:23bad82d53ef"
+      ],
+      "service": "notification-service",
+      "id": "OBS-3",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Consumer lag metric stays ~100‑140 messages (baseline ≈ 117) until 13:30, then jumps to 8,230 at 13:32 and grows steadily to 174,500 by 14:02.",
+      "artifacts": [
+        "metric:notification-service/consumer_lag"
+      ],
+      "service": "notification-service",
+      "id": "OBS-4",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "WARN log “consumer group notify-trades is <lag> messages behind” first appears at 13:40:37 UTC reporting 67,405 messages behind and continues through 14:04.",
+      "artifacts": [
+        "log:7cf4e32d00a9"
+      ],
+      "service": "notification-service",
+      "id": "OBS-5",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "CPU utilization rises from a baseline mean of 0.504 to a last value of 0.934 (mean 0.771) over the window.",
+      "artifacts": [
+        "metric:notification-service/cpu_util"
+      ],
+      "service": "notification-service",
+      "id": "OBS-6",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Error rate remains at or below baseline (mean 0.00198 vs baseline 0.00205); no error‑rate spike observed.",
+      "artifacts": [
+        "metric:notification-service/error_rate"
+      ],
+      "service": "notification-service",
+      "id": "OBS-7",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Request latency (p50 ~44 ms, p99 ~267 ms) stays within baseline ranges throughout.",
+      "artifacts": [
+        "metric:notification-service/latency_p50_ms",
+        "metric:notification-service/latency_p99_ms"
+      ],
+      "service": "notification-service",
+      "id": "OBS-8",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "WARN log “email to <domain> deferred by smtp relay” appears first at 13:18:48 UTC (6 total occurrences).",
+      "artifacts": [
+        "log:57f4c2c8de0e"
+      ],
+      "service": "notification-service",
+      "id": "OBS-9",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "notification‑service v3.9.0 was deployed at 2026‑10‑12T13:12:40Z (change‑census chg:2571).",
+      "artifacts": [
+        "chg:2571"
+      ],
+      "service": "notification-service",
+      "id": "OBS-10",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "WARN log “config key smtp.pool_size is deprecated; use smtp.max_connections” appears 413 times from 13:13:16Z to 14:04:57Z.",
+      "artifacts": [
+        "log:23bad82d53ef"
+      ],
+      "service": "notification-service",
+      "id": "OBS-11",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "WARN log “consumer group notify‑trades is <lag> messages behind” appears 52 times starting 13:40:37Z, with an example lag of 67 405 messages at 14:04:41Z.",
+      "artifacts": [
+        "log:7cf4e32d00a9"
+      ],
+      "service": "notification-service",
+      "id": "OBS-12",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "WARN log “email to <domain> deferred by smtp relay” appears 6 times from 13:18:48Z to 14:04:33Z.",
+      "artifacts": [
+        "log:57f4c2c8de0e"
+      ],
+      "service": "notification-service",
+      "id": "OBS-13",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "Consumer‑lag metric baseline ≈118 messages; it stays ~100‑140 until 13:30Z, then jumps to 8 230 at 13:32Z and climbs monotonically to 174 500 by 14:02Z.",
+      "artifacts": [
+        "metric:notification-service/consumer_lag"
+      ],
+      "service": "notification-service",
+      "id": "OBS-14",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "CPU utilization rises from baseline 0.504 to 0.934 (near saturation) by the end of the window.",
+      "artifacts": [
+        "metric:notification-service/cpu_util"
+      ],
+      "service": "notification-service",
+      "id": "OBS-15",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "Error rate remains steady around the baseline 0.002 (min 0.00068, max 0.0035).",
+      "artifacts": [
+        "metric:notification-service/error_rate"
+      ],
+      "service": "notification-service",
+      "id": "OBS-16",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "p50 latency stays at the baseline 44.8 ms; p99 latency rises modestly from baseline 255 ms to an average 267 ms.",
+      "artifacts": [
+        "metric:notification-service/latency_p50_ms",
+        "metric:notification-service/latency_p99_ms"
+      ],
+      "service": "notification-service",
+      "id": "OBS-17",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "Starting at 13:13:16 UTC the new client emitted the warning “config key smtp.pool_size is deprecated; use smtp.max_connections” continuously (413 occurrences).",
+      "artifacts": [
+        "log:23bad82d53ef"
+      ],
+      "service": "notification-service",
+      "id": "OBS-27",
+      "source": "r2-dependency-5"
+    },
+    {
+      "statement": "CPU utilisation rises from baseline mean 0.504 to a last value of 0.974 (mean over window 0.786), reaching near‑saturation by 14:10 UTC.",
+      "artifacts": [
+        "metric:notification-service/cpu_util"
+      ],
+      "service": "notification-service",
+      "id": "OBS-30",
+      "source": "r2-observability-4"
+    },
+    {
+      "statement": "Error rate remains flat around baseline (mean 0.00200 vs baseline 0.00205; min 0.00068, max 0.0035) with no spike at deploy.",
+      "artifacts": [
+        "metric:notification-service/error_rate"
+      ],
+      "service": "notification-service",
+      "id": "OBS-31",
+      "source": "r2-observability-4"
+    },
+    {
+      "statement": "Request latency stays within baseline: p50 mean 44.9 ms (baseline 44.7 ms); p99 mean 264.6 ms (baseline 256.7 ms).",
+      "artifacts": [
+        "metric:notification-service/latency_p50_ms",
+        "metric:notification-service/latency_p99_ms"
+      ],
+      "service": "notification-service",
+      "id": "OBS-32",
+      "source": "r2-observability-4"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The deprecated key `smtp.pool_size` is still consulted by the new client and its value limits the connection pool.",
+      "reason": "The new library emits a deprecation warning for that key continuously after deploy, implying it reads the key.",
+      "id": "ASM-6",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The client sends mail on the Kafka consumer thread (no async hand‑off).",
+      "reason": "Consumer lag spikes only after the deploy and no separate worker metric exists; blocking the consumer thread explains the lag pattern.",
+      "id": "ASM-7",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "No other config change (pool size, max_connections, feature flag) occurred at 13:12.",
+      "reason": "Change history shows only the deploy event in the window.",
+      "id": "ASM-8",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The external SMTP relay began rate‑limiting at 13:18 and the deferral codes are the primary cause of the block.",
+      "reason": "First ‘deferred by smtp relay’ warning appears at 13:18, coinciding with later lag growth.",
+      "id": "ASM-9",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The client does not retry asynchronously; each deferral blocks the consumer thread.",
+      "reason": "Synchronous send model assumed from lag behavior; no evidence of async queue.",
+      "id": "ASM-10",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "No internal config change (pool size) contributed to the slowdown.",
+      "reason": "Only deploy recorded; no config change events.",
+      "id": "ASM-11",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The new library performs a full TLS handshake (or similar expensive work) for every outbound mail.",
+      "reason": "CPU rises sharply after deploy with no other workload change.",
+      "id": "ASM-12",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "No other workload change explains the CPU rise.",
+      "reason": "Request rate, memory, error rate remain stable.",
+      "id": "ASM-13",
+      "source": "r2-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_metrics",
+      "scope": "kafka broker metrics (produce rate, consume rate, broker‑reported consumer lag)",
+      "reason": "Not queried; needed to confirm whether the backlog originates from producer surge or consumer slowdown.",
+      "id": "GAP-1",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "per‑instance notification-service metrics (SMTP send latency, thread‑pool queue length, GC pauses)",
+      "reason": "Only service‑aggregated metrics were available; instance‑level detail could pinpoint the bottleneck.",
+      "id": "GAP-2",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "ERROR‑level logs for notification-service",
+      "reason": "Only WARN patterns returned; absence of ERROR logs could hide crashes or exceptions.",
+      "id": "GAP-3",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "SMTP relay / mail‑gateway logs",
+      "reason": "External relay deferral warnings seen, but relay‑side logs not accessible via current tooling.",
+      "id": "GAP-4",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "email‑send latency / outbound queue depth",
+      "reason": "No metric exposing per‑email send time or SMTP queue length is available for notification‑service.",
+      "id": "GAP-5",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "INFO‑level successful email‑send records",
+      "reason": "Only WARN+ patterns were fetched; successful send throughput cannot be compared pre/post deploy.",
+      "id": "GAP-6",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "SMTP relay health (external)",
+      "reason": "Relay‑side metrics (deferral codes, connection limits) are not collected in our platform.",
+      "id": "GAP-7",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "Rollback verification logs",
+      "reason": "No rollback has been performed yet, so post‑rollback behavior is unknown.",
+      "id": "GAP-8",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "notification‑service configuration (SMTP host, credentials, pool size) and any feature‑flag state for the new SMTP client",
+      "reason": "Change census only records deploys; config or flag changes are not captured.",
+      "id": "GAP-9",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Secret rotations for SMTP credentials or Kafka SASL/SSL secrets",
+      "reason": "Secret rotations are not represented in the change log.",
+      "id": "GAP-10",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_service_dependencies",
+      "scope": "Potential upstream callers of notification‑service (e.g., internal APIs that trigger emails)",
+      "reason": "Dependency graph only shows downstream deps; upstream services are missing.",
+      "id": "GAP-11",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Kafka broker health metrics (broker CPU, disk, network) and topic‑level producer/consumer metrics for the window",
+      "reason": "No infra‑level metrics were queried; broker issues could affect consumer lag.",
+      "id": "GAP-12",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "config, feature_flag, secret_rotation, infra for notification-service 13:00‑13:30 UTC",
+      "reason": "The change‑history API records only change events, not the actual configuration values or feature‑flag states at a point in time.",
+      "id": "GAP-13",
+      "source": "r2-dependency-5"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "ConfigMap/Secret version history for notification-service SMTP settings",
+      "reason": "No tool in the current toolbox exposes the stored key/value pairs; an audit of the config store is required to retrieve the numeric pool size and max_connections values.",
+      "id": "GAP-14",
+      "source": "r2-dependency-5"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "notification-service metrics catalogue (13:10‑14:10 UTC)",
+      "reason": "Service does not emit smtp_send_latency_ms or any thread‑pool / connection‑pool queue‑length metric, preventing direct verification of a step increase at deploy.",
+      "id": "GAP-15",
+      "source": "r2-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "per‑instance breakdown of CPU, lag, latency",
+      "reason": "Current API returns only service‑wide aggregates; instance‑level outliers cannot be examined.",
+      "id": "GAP-16",
+      "source": "r2-observability-4"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "DEBUG‑level SMTP client logs around deploy",
+      "reason": "Log collection limited to WARN+; detailed send timings are not captured.",
+      "id": "GAP-17",
+      "source": "r2-observability-4"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Roll back notification‑service to v3.8.4 (the previous stable version).",
+      "rationale": "All three hypotheses share the deploy as the trigger; a rollback will immediately stop the lag growth and email delay while root cause is pursued.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Replace the deprecated `smtp.pool_size` configuration with the supported `smtp.max_connections` and set an appropriately sized pool.",
+      "rationale": "HYP-1 posits that the deprecated key yields an undersized connection pool, causing synchronous sends to block the Kafka consumer.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "fix",
+      "description": "Refactor email sending to run asynchronously (e.g., hand off to a worker pool or separate thread) instead of blocking the Kafka consumer thread.",
+      "rationale": "Both HYP-1 and HYP-2 assume synchronous sends on the consumer thread; decoupling removes the direct path from SMTP latency to consumer lag.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add service‑level metrics for SMTP send latency, outbound queue depth, and thread‑pool/connection‑pool queue length; expose per‑instance breakdowns.",
+      "rationale": "Current metric catalogue lacks these series (GAP‑2, GAP‑5, GAP‑15), preventing verification of a step increase at deploy and future regressions.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Obtain external SMTP relay logs and metrics (deferral codes, rate‑limit counters) for the 13:18 UTC window.",
+      "rationale": "HYP-2 claims relay throttling began at 13:18, but relay‑side data is unavailable (GAP‑4, GAP‑7).",
+      "hypothesis_id": "HYP-2",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Audit the notification‑service ConfigMap/Secret to retrieve the exact numeric values of `smtp.pool_size` and `smtp.max_connections` at deploy time.",
+      "rationale": "HYP-1's core claim about an undersized pool cannot be verified without the actual config values (GAP‑9, GAP‑14).",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Profile the new SMTP client library for per‑message CPU cost (e.g., TLS handshake) and capture GC pause / thread‑pool queue metrics.",
+      "rationale": "HYP-3 attributes CPU saturation to a full TLS handshake per email, yet no profiling or GC data exists (GAP‑2, GAP‑17).",
+      "hypothesis_id": "HYP-3",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Identify any upstream services that call notification‑service directly (internal APIs triggering emails) to rule out hidden traffic spikes.",
+      "rationale": "Dependency graph only shows downstream Kafka consumption; unknown callers could affect load (GAP‑11).",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "What are the exact runtime values of `smtp.pool_size` / `smtp.max_connections` after the v3.9.0 deploy?",
+    "Does the notification‑service perform email sends synchronously on the Kafka consumer thread, or is there an async hand‑off?",
+    "Did the external SMTP relay actually throttle or defer messages starting at 13:18 UTC, and what were the relay‑side deferral codes?",
+    "How much CPU time does the new SMTP client consume per outbound email (e.g., full TLS handshake vs session reuse)?",
+    "Why do error rate and request latency remain at baseline while consumer lag and CPU explode?",
+    "What is the per‑instance distribution of consumer lag and CPU – is a single instance driving the aggregate?",
+    "Are there any secret rotations or feature‑flag changes for SMTP credentials or the new client that were not captured in the change log?",
+    "What upstream services (if any) invoke notification‑service directly, and could they have contributed to load?"
+  ],
+  "termination": "reached the limit of 2 rounds",
+  "stats": {
+    "rounds": 2,
+    "model_calls": 31,
+    "tool_calls": 13,
+    "tokens": 146995,
+    "elapsed_s": 670.13
+  }
+}

@@ -1,0 +1,580 @@
+{
+  "incident_id": "T10",
+  "title": "Withdrawals failing",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "Withdrawals failed for several customers between roughly 17:48 UTC and 17:59 UTC, with the edge‑gateway returning 502 errors from payments‑service, which logged repeated “bank‑rails call returned an error” messages. The most likely cause is an unannounced maintenance window on the bank‑rails dependency (HYP‑1, 68 % confidence), but bank‑rails metrics and logs for the critical 17:15‑18:00 UTC window are unavailable, so the hypothesis cannot be fully verified. Deposits remained healthy because they use a different rail. The investigation was stopped because the allocated time budget was reached.",
+  "root_cause": {
+    "service": "bank-rails",
+    "category": "dependency_degradation",
+    "trigger": null
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "bank-rails",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "Bank‑rails entered an unannounced maintenance window, causing its HTTPS endpoint to return errors or time out. Payments‑service calls bank‑rails with a hard 4 s timeout (OBS‑2) and propagates those failures as “bank‑rails call returned an error” (OBS‑9). Edge‑gateway receives 502 from payments‑service on POST /v1/withdrawals (OBS‑5). Deposits remain healthy because they use a different rail.",
+        "supporting": [
+          "OBS-2",
+          "OBS-4",
+          "OBS-5",
+          "OBS-9"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-6",
+          "ASM-7"
+        ],
+        "predictions": [
+          "Bank‑rails metrics will show a sharp latency/error spike and possibly an open circuit‑breaker during 17:45‑18:00 UTC.",
+          "Bank‑rails logs will contain maintenance‑related messages or elevated error rates in the same window."
+        ],
+        "confidence": 0.68,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.68,
+      "calibration": [],
+      "confidence_band": "medium",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "Bank‑rails metrics (error rate, latency, circuit‑breaker) and logs for 17:15‑18:00 UTC are unavailable (GAP‑19, GAP‑20, GAP‑21), so the predicted spike cannot be verified.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "analogy_only",
+          "severity": "minor",
+          "detail": "Supporting citations OBS‑11 and OBS‑12 reference a past incident (pir:2026-011) rather than current observations.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "HYP‑2, HYP‑3, and HYP‑4 remain plausible and have not been ruled out.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "payments-service",
+          "category": "code_regression",
+          "trigger": null
+        },
+        "mechanism": "A silent deploy or configuration change around 17:45 UTC introduced a regression in the bank‑rails client (e.g., wrong timeout, broken retry logic). Payments‑service then fails calls to bank‑rails and logs “bank‑rails call returned an error” (OBS‑9) while also breaking checkout (OBS‑10). Edge‑gateway surfaces the 502 (OBS‑5).",
+        "supporting": [
+          "OBS-5",
+          "OBS-9",
+          "OBS-10"
+        ],
+        "contradicting": [
+          "OBS-2",
+          "OBS-4"
+        ],
+        "assumptions": [
+          "ASM-8",
+          "ASM-9"
+        ],
+        "predictions": [
+          "Payments‑service change history will show a deploy/config change at ~17:45 UTC.",
+          "Bank‑rails metrics will remain normal (no spike) because the fault is upstream."
+        ],
+        "confidence": 0.22,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.22,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "Change‑history for payments‑service (and related services) could not be retrieved (GAP‑1‑4, GAP‑17‑18), so a deploy at ~17:45 UTC cannot be confirmed.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "unsupported_claim",
+          "severity": "minor",
+          "detail": "Assumes a silent deploy/config change without any observed change record.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "HYP‑1, HYP‑3, HYP‑4 still possible.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "payments-service",
+          "category": "resource_exhaustion",
+          "trigger": null
+        },
+        "mechanism": "Payments‑service exhausted its HTTP client connection pool (or thread pool) when calling bank‑rails, causing it to surface upstream errors as “bank‑rails call returned an error” (OBS‑9) and also break checkout (OBS‑10). Edge‑gateway receives 502 from payments‑service (OBS‑5).",
+        "supporting": [
+          "OBS-5",
+          "OBS-9",
+          "OBS-10"
+        ],
+        "contradicting": [
+          "OBS-2"
+        ],
+        "assumptions": [
+          "ASM-10",
+          "ASM-11"
+        ],
+        "predictions": [
+          "Payments‑service client‑pool metrics will show saturation/exhaustion counters rising at ~17:45 UTC and falling by 18:00 UTC.",
+          "Bank‑rails metrics will stay normal."
+        ],
+        "confidence": 0.07,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.07,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "Payments‑service client‑pool saturation metrics not fetched (GAP‑14) and metrics backend down, preventing verification of exhaustion.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "unsupported_claim",
+          "severity": "minor",
+          "detail": "Assumes connection‑pool exhaustion without metric evidence.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "HYP‑1, HYP‑2, HYP‑4 still possible.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "bank-rails",
+          "category": "certificate_or_credential",
+          "trigger": null
+        },
+        "mechanism": "Bank‑rails rotated a TLS certificate or revoked an API key at ~17:45 UTC. HTTPS calls from payments‑service fail with a generic error that payments‑service logs as “bank‑rails call returned an error” (OBS‑9). Edge‑gateway sees 502 (OBS‑5).",
+        "supporting": [
+          "OBS-5",
+          "OBS-9"
+        ],
+        "contradicting": [
+          "OBS-2"
+        ],
+        "assumptions": [
+          "ASM-12"
+        ],
+        "predictions": [
+          "Bank‑rails logs will show TLS handshake failures or credential rejection messages at the onset.",
+          "Payments‑service client‑side error pattern will be immediate (no 4 s timeout)."
+        ],
+        "confidence": 0.03,
+        "version": 1,
+        "round": 2
+      },
+      "confidence": 0.03,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-4",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "Bank‑rails logs showing TLS handshake or credential failures are missing for the critical window (GAP‑12, GAP‑16, GAP‑20, GAP‑21).",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-4",
+          "kind": "unsupported_claim",
+          "severity": "minor",
+          "detail": "Assumes certificate/credential rotation without any observed log evidence.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-4",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "HYP‑1, HYP‑2, HYP‑3 still possible.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "payments-service calls bank-rails over HTTPS with hard criticality (timeout 4 s).",
+      "artifacts": [
+        "dep:payments-service->bank-rails"
+      ],
+      "service": "payments-service",
+      "id": "OBS-2",
+      "source": "r1-dependency-3"
+    },
+    {
+      "statement": "No direct hard dependency from edge-gateway to bank-rails or postgres-payments; the withdrawal path must traverse payments-service.",
+      "artifacts": [
+        "dep:edge-gateway->payments-service",
+        "dep:payments-service->bank-rails",
+        "dep:payments-service->postgres-payments"
+      ],
+      "service": null,
+      "id": "OBS-4",
+      "source": "r1-dependency-3"
+    },
+    {
+      "statement": "Edge‑gateway logged 31 warnings of “upstream payments‑service returned 502 (route POST /v1/withdrawals)” between 2026‑10‑15 17:48:34 UTC and 2026‑10‑15 17:59:57 UTC.",
+      "artifacts": [
+        "log:8fed29f3ce72",
+        "log:21ea9e40baee",
+        "log:5cc048209803"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-5",
+      "source": "r1-observability-2"
+    },
+    {
+      "statement": "payments-service logged 44 ERROR lines matching “withdrawal <id> failed: bank‑rails call returned an error” between 2026‑10‑15T17:48:12.345Z and 2026‑10‑15T17:59:37.986Z.",
+      "artifacts": [
+        "log:33df62f69e8a"
+      ],
+      "service": "payments-service",
+      "id": "OBS-9",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "payments-service also emitted 6 ERROR lines for “POST /v1/checkout 502 9ms” between 2026‑10‑15T17:48:21.239Z and 2026‑10‑15T17:58:09.128Z.",
+      "artifacts": [
+        "log:3d2e4dba2230"
+      ],
+      "service": "payments-service",
+      "id": "OBS-10",
+      "source": "r1-observability-1"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "Bank‑rails endpoint began returning errors/time‑outs at ~17:45 UTC and stayed degraded until ~18:00 UTC.",
+      "reason": "Supported by historical analogue (Feb incident) and the timing of observed errors in payments‑service and edge‑gateway.",
+      "id": "ASM-6",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "Deposits succeed because they use a different rail, unaffected by the maintenance.",
+      "reason": "Incident summary states deposits seem fine.",
+      "id": "ASM-7",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "A deploy / flag flip / secret rotation occurred at ~17:45 UTC that altered the bank‑rails client in payments‑service.",
+      "reason": "No change history could be retrieved (GAP‑1‑4); this assumption is required for HYP‑2 to be possible.",
+      "id": "ASM-8",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The change only affected withdrawal/checkout code paths, leaving deposits untouched.",
+      "reason": "Observed symptoms limited to withdrawals and checkout.",
+      "id": "ASM-9",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "Payments‑service ran out of HTTP client connections to bank‑rails (or its own DB pool) causing it to surface upstream errors.",
+      "reason": "Resource exhaustion can masquerade as downstream errors; no direct metric evidence (GAP‑14).",
+      "id": "ASM-10",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The exhaustion started ~17:45 UTC and cleared by 18:00 UTC.",
+      "reason": "Matches the window of observed error bursts.",
+      "id": "ASM-11",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "Bank‑rails rotated a cert or revoked a key at ~17:45 UTC, causing HTTPS calls to fail.",
+      "reason": "Feb incident involved a cert change; plausible but no log evidence (GAP‑12, GAP‑20).",
+      "id": "ASM-12",
+      "source": "r2-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "get_change_history",
+      "scope": "start=2026-10-15T17:00:00Z, end=2026-10-15T18:00:00Z",
+      "reason": "unavailable: get_change_history backend returned 503 Service Unavailable",
+      "id": "GAP-1",
+      "source": "change-census"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "payments-service, bank-rails, postgres-payments, edge-gateway, kafka (2026-10-15 17:15‑18:00 UTC)",
+      "reason": "Backend returned 503 then was marked down; no change records could be retrieved.",
+      "id": "GAP-2",
+      "source": "r1-dependency-3"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "services=['payments-service', 'bank-rails', 'postgres-payments', 'edge-gateway', 'kafka'], start=2026-10-15T17:15:00Z, end=2026-10-15T18:00:00Z",
+      "reason": "unavailable: get_change_history backend returned 503 Service Unavailable",
+      "id": "GAP-3",
+      "source": "r1-dependency-3"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "services=['payments-service', 'bank-rails', 'postgres-payments', 'edge-gateway', 'kafka'], start=2026-10-15T17:15:00Z, end=2026-10-15T18:00:00Z",
+      "reason": "refused: get_change_history has failed 2 calls in a row; its backend is treated as down for the rest of this investigation",
+      "id": "GAP-4",
+      "source": "r1-dependency-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "edge-gateway metrics 2026‑10‑15 17:15‑18:00 UTC",
+      "reason": "Query timed out after 10 s; no metric data retrieved.",
+      "id": "GAP-5",
+      "source": "r1-observability-2"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "edge-gateway logs before 2026‑10‑15 17:48 UTC",
+      "reason": "Log retention expired; earlier events not returned.",
+      "id": "GAP-6",
+      "source": "r1-observability-2"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "edge-gateway az‑a shard",
+      "reason": "Shard unavailable; logs from that AZ excluded.",
+      "id": "GAP-7",
+      "source": "r1-observability-2"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "service=edge-gateway, start=2026-10-15T17:15:00Z, end=2026-10-15T18:00:00Z",
+      "reason": "log shard for az-a is unavailable; results exclude pods in az-a; logs before 2026-10-15 17:48 UTC have expired and are not returned",
+      "id": "GAP-8",
+      "source": "r1-observability-2"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "service=edge-gateway, start=2026-10-15T17:15:00Z, end=2026-10-15T18:00:00Z",
+      "reason": "timeout: query_metrics did not respond within 10s",
+      "id": "GAP-9",
+      "source": "r1-observability-2"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "service=edge-gateway",
+      "reason": "timeout: query_metrics did not respond within 10s",
+      "id": "GAP-10",
+      "source": "r1-observability-2"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "payments-service logs before 17:48 UTC",
+      "reason": "Log shards expired; cannot see when the first failure began.",
+      "id": "GAP-11",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "bank‑rails logs (all levels) for 17:15‑18:00",
+      "reason": "No patterns returned; missing shard az‑a and possible log loss.",
+      "id": "GAP-12",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "postgres‑payments logs (WARN/ERROR) for 17:15‑18:00",
+      "reason": "Not queried; need to confirm DB‑side errors.",
+      "id": "GAP-13",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "payments‑service, bank‑rails, postgres‑payments key metrics (error rate, latency, saturation, circuit‑breaker state) for 17:15‑18:00",
+      "reason": "Metrics not fetched; needed to pinpoint onset and saturation signals.",
+      "id": "GAP-14",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "service=payments-service, start=2026-10-15T17:15:00Z, end=2026-10-15T18:00:00Z",
+      "reason": "log shard for az-a is unavailable; results exclude pods in az-a; logs before 2026-10-15 17:48 UTC have expired and are not returned",
+      "id": "GAP-15",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "service=bank-rails, start=2026-10-15T17:15:00Z, end=2026-10-15T18:00:00Z",
+      "reason": "log shard for az-a is unavailable; results exclude pods in az-a; logs before 2026-10-15 17:48 UTC have expired and are not returned",
+      "id": "GAP-16",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "payments-service, bank-rails between 2026-10-15T17:15:00Z and 2026-10-15T18:00:00Z",
+      "reason": "Backend refused the request and is treated as down; no change records could be fetched.",
+      "id": "GAP-17",
+      "source": "r2-dependency-5"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "services=['payments-service', 'bank-rails'], start=2026-10-15T17:15:00Z, end=2026-10-15T18:00:00Z",
+      "reason": "refused: get_change_history has failed 2 calls in a row; its backend is treated as down for the rest of this investigation",
+      "id": "GAP-18",
+      "source": "r2-dependency-5"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "bank‑rails error‑rate, latency (p99), saturation, circuit‑breaker state for 2026‑10‑15T17:15:00Z‑2026‑10‑15T18:00:00Z",
+      "reason": "Metrics backend refused after two consecutive failures and is treated as down.",
+      "id": "GAP-19",
+      "source": "r2-observability-4"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "bank‑rails logs from 2026‑10‑15T17:15:00Z‑2026‑10‑15T17:48:00Z (all AZs)",
+      "reason": "Logs before 17:48 UTC have expired; AZ‑a shard unavailable.",
+      "id": "GAP-20",
+      "source": "r2-observability-4"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "bank‑rails logs from AZ‑a after 2026‑10‑15T17:48:00Z",
+      "reason": "AZ‑a log shard is unavailable, so any zone‑specific errors are missing.",
+      "id": "GAP-21",
+      "source": "r2-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "service=bank-rails, start=2026-10-15T17:15:00Z, end=2026-10-15T18:00:00Z",
+      "reason": "refused: query_metrics has failed 2 calls in a row; its backend is treated as down for the rest of this investigation",
+      "id": "GAP-22",
+      "source": "r2-observability-4"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "service=bank-rails, start=2026-10-15T17:15:00Z, end=2026-10-15T18:00:00Z",
+      "reason": "log shard for az-a is unavailable; results exclude pods in az-a; logs before 2026-10-15 17:48 UTC have expired and are not returned",
+      "id": "GAP-23",
+      "source": "r2-observability-4"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Add a graceful fallback for withdrawal requests when bank‑rails calls fail (e.g., return a user‑friendly error and queue the request for retry).",
+      "rationale": "Immediately reduces customer impact while the root cause is being confirmed.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Engage the bank‑rails vendor to obtain a maintenance schedule and enforce a notification SLA for any future planned or unplanned outages.",
+      "rationale": "If HYP‑1 is correct, lack of notice caused the outage; a formal SLA prevents recurrence.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Improve observability for bank‑rails: retain metrics (error rate, latency, circuit‑breaker state) and logs for at least 48 h, and add alerts on sustained error‑rate spikes.",
+      "rationale": "Current gaps (GAP‑19‑21) prevented verification; better data will allow faster confirmation next time.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Retrieve bank‑rails metrics and full logs for 17:15‑18:00 UTC (including AZ‑a shard) to confirm a latency/error spike or maintenance messages.",
+      "rationale": "Directly tests the prediction of HYP‑1 and closes GAP‑19‑21.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Obtain payments‑service change history for 17:15‑18:00 UTC to rule out a silent deploy or config change.",
+      "rationale": "Addresses GAP‑1‑4, 17‑18 and the HYP‑2 alternative.",
+      "hypothesis_id": "HYP-2",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Collect payments‑service HTTP client‑pool saturation metrics for the incident window.",
+      "rationale": "Validates or rejects the connection‑pool exhaustion scenario in HYP‑3 (GAP‑14).",
+      "hypothesis_id": "HYP-3",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Check bank‑rails TLS certificate and credential rotation logs around 17:45 UTC.",
+      "rationale": "Tests the certificate/credential hypothesis (HYP‑4) and closes GAP‑12, 16, 20, 21.",
+      "hypothesis_id": "HYP-4",
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Did bank‑rails actually undergo an unannounced maintenance window during 17:15‑18:00 UTC?",
+    "Was there any silent deploy or configuration change in payments‑service (or its dependencies) at ~17:45 UTC?",
+    "Did the payments‑service HTTP client connection pool become saturated during the incident?",
+    "Were any TLS certificate rotations or API‑key revocations performed on bank‑rails at the onset?",
+    "What was the exact start time of the first withdrawal failure (logs before 17:48 UTC are missing)?"
+  ],
+  "termination": "time budget reached",
+  "stats": {
+    "rounds": 2,
+    "model_calls": 31,
+    "tool_calls": 14,
+    "tokens": 123124,
+    "elapsed_s": 1009.91
+  }
+}

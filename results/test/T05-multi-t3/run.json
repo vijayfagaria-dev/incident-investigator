@@ -1,0 +1,10 @@
+{
+  "incident_id": "T05",
+  "system": "multi",
+  "trial": 3,
+  "model": "nvidia/nemotron-3-ultra-550b-a55b",
+  "config_digest": "3b85b58a59ca",
+  "started_at": "2026-10-21T15:08:06.564727Z",
+  "wall_s": 453.8,
+  "error": null
+}

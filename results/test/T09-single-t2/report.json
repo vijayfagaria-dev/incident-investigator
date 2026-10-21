@@ -1,0 +1,353 @@
+{
+  "incident_id": "T09",
+  "title": "Notification pods restarting",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "At 07:12 UTC a deploy of notification-service v3.9.2 added a per‑locale template cache. Within ~20 minutes GC overhead warnings appeared, memory utilisation climbed from 73% to 97% of the 1 GiB limit, and the first OOMKilled occurred at 07:52 UTC. Restarts caused consumer lag to surge to >40k messages and error‑rate to rise. Kafka and upstream services showed no degradation. The sole production change in the window points to a memory leak in the new cache.",
+  "root_cause": {
+    "service": "notification-service",
+    "category": "code_regression",
+    "trigger": "chg:2591"
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "code_regression",
+          "trigger": "chg:2591"
+        },
+        "mechanism": "The v3.9.2 deploy added a per‑locale template cache without eviction. Each distinct locale creates cached objects that are never released, causing steady heap growth, high GC overhead, eventual OOMKills, pod restarts, and resulting consumer lag and error‑rate spikes.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-7",
+          "OBS-9"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-8"
+        ],
+        "assumptions": [
+          "ASM-1"
+        ],
+        "predictions": [
+          "Heap dump from a crashing pod will show a large number of cached template objects keyed by locale.",
+          "Rolling back to v3.9.1 will stop memory growth and OOMKills."
+        ],
+        "confidence": 0.86,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.86,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "capacity_saturation",
+          "trigger": null
+        },
+        "mechanism": "An unexpected surge in notification traffic overwhelms the service's memory capacity, leading to GC pressure and OOMKills.",
+        "supporting": [
+          "OBS-4",
+          "OBS-5",
+          "OBS-6"
+        ],
+        "contradicting": [
+          "OBS-1",
+          "OBS-3",
+          "OBS-7",
+          "OBS-8",
+          "OBS-9"
+        ],
+        "assumptions": [
+          "ASM-2"
+        ],
+        "predictions": [
+          "External traffic metrics (e.g., upstream event rates) would show a sharp increase coincident with 07:30 UTC."
+        ],
+        "confidence": 0.12,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.12,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "kafka",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "Kafka broker degradation causes back‑pressure, making the consumer lag grow and the service retain more messages in memory.",
+        "supporting": [
+          "OBS-4"
+        ],
+        "contradicting": [
+          "OBS-8",
+          "OBS-9"
+        ],
+        "assumptions": [
+          "ASM-3"
+        ],
+        "predictions": [
+          "Kafka broker logs would show errors or increased latency not visible in current metrics."
+        ],
+        "confidence": 0.01,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.01,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "config_change",
+          "trigger": null
+        },
+        "mechanism": "A runtime configuration or feature‑flag change increased cache size or disabled eviction, causing memory leak.",
+        "supporting": [],
+        "contradicting": [
+          "OBS-7"
+        ],
+        "assumptions": [
+          "ASM-4"
+        ],
+        "predictions": [
+          "Audit logs would show a config/flag change at ~07:30 UTC."
+        ],
+        "confidence": 0.01,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.01,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "GC overhead warnings ('GC overhead high: <pct>% of time in garbage collection') start at 07:35:06 UTC and continue through 08:29 UTC (181 occurrences).",
+      "artifacts": [
+        "log:f681f54530df"
+      ],
+      "service": "notification-service",
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "OOMKilled events for notification-service pods begin at 07:52:13 UTC and repeat 27 times until 08:29 UTC.",
+      "artifacts": [
+        "log:c39fab989944"
+      ],
+      "service": "notification-service",
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Memory utilisation rises from 0.736 at 07:30 UTC to 0.970 at 08:30 UTC (baseline 0.576).",
+      "artifacts": [
+        "metric:notification-service/mem_util"
+      ],
+      "service": "notification-service",
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "Consumer lag jumps from ~69 messages at 07:30 UTC to ~41,370 messages at 08:30 UTC (baseline ~125).",
+      "artifacts": [
+        "metric:notification-service/consumer_lag"
+      ],
+      "service": "notification-service",
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "Error rate increases from 0.002 at 07:30 UTC to 0.032 at 08:30 UTC (baseline 0.002).",
+      "artifacts": [
+        "metric:notification-service/error_rate"
+      ],
+      "service": "notification-service",
+      "id": "OBS-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "Request rate rises modestly from 107 rps to 123 rps (baseline 106 rps).",
+      "artifacts": [
+        "metric:notification-service/rps"
+      ],
+      "service": "notification-service",
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "Deploy of notification-service v3.9.2 at 07:12:30 UTC (commit 0f6c3a8) adding per‑locale template cache (+88/-21 lines).",
+      "artifacts": [
+        "chg:2591"
+      ],
+      "service": "notification-service",
+      "id": "OBS-7",
+      "source": "investigate"
+    },
+    {
+      "statement": "Kafka metrics show stable CPU, inbound rate only +7% vs baseline, and zero under‑replicated partitions throughout the window.",
+      "artifacts": [
+        "metric:kafka/broker_cpu_util",
+        "metric:kafka/messages_in_per_s",
+        "metric:kafka/under_replicated_partitions"
+      ],
+      "service": "kafka",
+      "id": "OBS-8",
+      "source": "investigate"
+    },
+    {
+      "statement": "Dependency graph: notification-service has a hard dependency on Kafka; no upstream services call notification-service directly.",
+      "artifacts": [
+        "dep:notification-service->kafka"
+      ],
+      "service": "notification-service",
+      "id": "OBS-9",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The new per‑locale template cache introduced in v3.9.2 has no eviction or size bound, causing unbounded object retention.",
+      "reason": "Code change adds caching but no configuration for limits was observed in the diff summary.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "A hidden burst of notification events not reflected in the rps metric could drive memory growth.",
+      "reason": "Only aggregate rps metric available; spike could be masked.",
+      "id": "ASM-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Kafka may have an undetected broker‑side issue not captured by exported metrics.",
+      "reason": "Metrics cover CPU, inbound rate, replication; other failure modes possible.",
+      "id": "ASM-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "An undocumented runtime config or feature‑flag change affecting cache behaviour occurred around 07:30 UTC.",
+      "reason": "No config/flag changes recorded, but not conclusively ruled out.",
+      "id": "ASM-4",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_logs",
+      "scope": "heap dump / detailed GC logs from a crashing notification-service pod",
+      "reason": "Toolset does not provide heap dumps; needed to confirm leaking object types.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "source code or diff details of the cache implementation",
+      "reason": "Diff summary only shows line counts; cannot verify eviction policy.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "per‑pod memory utilisation time series",
+      "reason": "Only aggregate metric available; cannot tell if leak is isolated to subset of pods.",
+      "id": "GAP-3",
+      "source": "investigate"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "feature‑flag or config change audit around 07:30 UTC",
+      "reason": "Change history shows no such changes, but tool may not capture all flag systems.",
+      "id": "GAP-4",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Rollback notification-service to v3.9.1 (or disable the new cache via feature flag).",
+      "rationale": "Immediately stops the memory leak introduced by the v3.9.2 deploy (H1).",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Temporarily raise pod memory limit to 1.5 GiB and enable HPA to drain consumer lag.",
+      "rationale": "Provides headroom while rollback proceeds and prevents further OOMKills.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Capture a heap dump from a pod before OOM (e.g., -XX:+HeapDumpOnOutOfMemoryError) and analyse retained objects.",
+      "rationale": "Confirms the cache leak and identifies exact object types (addresses Gap G1).",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "fix",
+      "description": "Add eviction policy / size bound (LRU, TTL) to the per‑locale template cache and deploy patched version after review.",
+      "rationale": "Eliminates the unbounded growth root cause (H1).",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add metric for cache entry count per pod and alert when it exceeds a threshold.",
+      "rationale": "Early detection of similar regressions (addresses Gap G4).",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Document the incident, add canary deploy with memory‑growth alert, and update release checklist to require cache‑size limits.",
+      "rationale": "Process improvement to avoid repeat of code‑regression memory leaks.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "What exact objects are retained in the locale cache? (requires heap dump).",
+    "Was the cache intended to be bounded? (code review / design doc).",
+    "Did any feature‑flag toggle the cache on/off around 07:30 UTC? (audit logs)."
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 8,
+    "tool_calls": 6,
+    "tokens": 44945,
+    "elapsed_s": 388.59
+  }
+}

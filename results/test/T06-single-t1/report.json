@@ -1,0 +1,386 @@
+{
+  "incident_id": "T06",
+  "title": "Intermittent errors across the app",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "At ~11:15 UTC edge‑gateway began seeing a sharp rise in upstream connection timeouts to portfolio‑service (≈2 % of requests). The same minute orders‑service logged massive PostgreSQL connection resets and a new “fee cache cold” pattern appeared right after the orders‑service v2.16.0 deploy at 11:05. Portfolio‑service simultaneously started failing gRPC calls to market‑data‑service. No other service changed. The weight of evidence points to a code regression in orders‑service v2.16.0 that overloads postgres‑orders, causing connection resets that cascade to portfolio‑service and then to edge‑gateway.",
+  "root_cause": {
+    "service": "orders-service",
+    "category": "code_regression",
+    "trigger": "chg:2561"
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "code_regression",
+          "trigger": "chg:2561"
+        },
+        "mechanism": "v2.16.0 introduces batch fee‑schedule lookups that open many short‑lived DB connections, exhausting postgres‑orders connection pool. Connection resets propagate to orders‑service and portfolio‑service (which also uses postgres‑orders). Portfolio‑service then fails its gRPC calls to market‑data‑service, causing edge‑gateway upstream timeouts.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-8",
+          "OBS-9"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-7"
+        ],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2",
+          "ASM-3"
+        ],
+        "predictions": [
+          "Rolling back orders‑service to v2.15.2 should eliminate postgres‑orders resets and downstream errors.",
+          "Orders‑service DB connection‑pool metrics would show a spike in concurrent connections after 11:05."
+        ],
+        "confidence": 0.55,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.55,
+      "calibration": [],
+      "confidence_band": "medium",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "postgres-orders",
+          "category": "infrastructure_failure",
+          "trigger": null
+        },
+        "mechanism": "A transient infrastructure problem (e.g., max‑connections limit, network blip) on postgres‑orders began ~11:15, causing connection resets for any client (orders‑service, portfolio‑service). Portfolio‑service’s gRPC failures are a secondary effect of its own DB trouble.",
+        "supporting": [
+          "OBS-4",
+          "OBS-5",
+          "OBS-1",
+          "OBS-2",
+          "OBS-3"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-7",
+          "OBS-9"
+        ],
+        "assumptions": [
+          "ASM-1",
+          "ASM-3"
+        ],
+        "predictions": [
+          "Postgres‑orders metrics would show a sudden rise in connection errors or saturation at 11:15.",
+          "Other services using postgres‑orders (if any) would exhibit similar resets."
+        ],
+        "confidence": 0.3,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.3,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "Sustained quotes‑vendor 429 rate‑limiting degrades market‑data‑service, making its gRPC endpoint unavailable. Portfolio‑service (and orders‑service) then experience gRPC failures, leading to edge‑gateway timeouts.",
+        "supporting": [
+          "OBS-5",
+          "OBS-6",
+          "OBS-1"
+        ],
+        "contradicting": [
+          "OBS-4",
+          "OBS-7",
+          "OBS-8",
+          "OBS-9"
+        ],
+        "assumptions": [
+          "ASM-1",
+          "ASM-3"
+        ],
+        "predictions": [
+          "Market‑data‑service error_rate and latency would spike sharply at 11:15.",
+          "Orders‑service would show gRPC failures to market‑data‑service as primary symptom, not DB resets."
+        ],
+        "confidence": 0.15,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.15,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "platform-network",
+          "category": "infrastructure_failure",
+          "trigger": null
+        },
+        "mechanism": "A cluster‑wide network or service‑mesh glitch caused intermittent TCP resets across multiple independent service pairs (orders→postgres, portfolio→market‑data, edge→portfolio) starting at 11:15.",
+        "supporting": [
+          "OBS-1",
+          "OBS-4",
+          "OBS-5"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-7",
+          "OBS-10"
+        ],
+        "assumptions": [
+          "ASM-1",
+          "ASM-3",
+          "ASM-4"
+        ],
+        "predictions": [
+          "Network‑level metrics (e.g., CNI drops, side‑car proxy errors) would show a simultaneous spike.",
+          "All services, including payments‑service and auth‑service, would exhibit some error increase."
+        ],
+        "confidence": 0.1,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.1,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "Edge‑gateway logs show upstream connection timeout to portfolio‑service starting at 11:15:01 (1,443 occurrences).",
+      "artifacts": [
+        "log:80f1f968cbad"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "Edge‑gateway error_rate rises from baseline 0.002 to mean 0.0096 (peak 0.025) during the incident window.",
+      "artifacts": [
+        "metric:edge-gateway/error_rate"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Edge‑gateway latency_p99 climbs from baseline 342 ms to mean 414 ms (peak 590 ms).",
+      "artifacts": [
+        "metric:edge-gateway/latency_p99_ms"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "Orders‑service logs PostgreSQL connection resets starting 11:15:13 (203 occurrences) and a new “fee cache cold; fetching N fee schedules” pattern appearing at 11:06:22 after the deploy.",
+      "artifacts": [
+        "log:a32c4ff0bfc1",
+        "log:e91658633ca4"
+      ],
+      "service": "orders-service",
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "Portfolio‑service logs gRPC calls to market‑data‑service failing with UNAVAILABLE (connection reset) from 11:15:13 (174 occurrences).",
+      "artifacts": [
+        "log:e0364bef1b6f"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "Market‑data‑service shows intermittent quotes‑vendor 429 responses throughout the morning, with no sharp change at 11:15.",
+      "artifacts": [
+        "log:04398295b807"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "Payments‑service shows only normal card‑decline warnings; no error‑rate spike.",
+      "artifacts": [
+        "log:4a9e6d0a3f8e"
+      ],
+      "service": "payments-service",
+      "id": "OBS-7",
+      "source": "investigate"
+    },
+    {
+      "statement": "Only production change in the 45‑minute window: orders‑service v2.16.0 deployed at 11:05:12 (batch fee‑schedule lookups).",
+      "artifacts": [
+        "chg:2561"
+      ],
+      "service": "orders-service",
+      "id": "OBS-8",
+      "source": "investigate"
+    },
+    {
+      "statement": "Dependency graph shows hard dependencies: edge‑gateway→portfolio‑service (3 s), edge‑gateway→orders‑service (3 s), orders‑service→postgres‑orders, orders‑service→market‑data‑service (gRPC), portfolio‑service→market‑data‑service (gRPC), portfolio‑service→postgres‑orders.",
+      "artifacts": [
+        "dep:edge-gateway->portfolio-service",
+        "dep:edge-gateway->orders-service",
+        "dep:orders-service->postgres-orders",
+        "dep:orders-service->market-data-service",
+        "dep:portfolio-service->market-data-service",
+        "dep:portfolio-service->postgres-orders"
+      ],
+      "service": null,
+      "id": "OBS-9",
+      "source": "investigate"
+    },
+    {
+      "statement": "No deployments, config changes, feature‑flag flips, secret rotations, or infra work for any other service in the window.",
+      "artifacts": [
+        "chg:2561"
+      ],
+      "service": null,
+      "id": "OBS-10",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "“Connection timeout to portfolio‑service” in edge‑gateway indicates the gateway cannot complete the HTTP call to portfolio‑service (service‑side failure).",
+      "reason": "Gateway logs show upstream timeout, not client abort.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "The “fee cache cold” log appears only after the v2.16.0 deploy, indicating the new code path touches the DB more aggressively.",
+      "reason": "Log pattern first seen at 11:06:22, right after deploy at 11:05:12.",
+      "id": "ASM-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "No hidden changes (config‑map rollout, feature‑flag, secret rotation) occurred for the other services.",
+      "reason": "Change history query returned only the orders‑service deploy.",
+      "id": "ASM-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "Postgres‑orders and market‑data‑service share no common infrastructure other than the network layer.",
+      "reason": "Separate datastore and external vendor; dependency graph shows distinct paths.",
+      "id": "ASM-4",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_metrics",
+      "scope": "postgres-orders connection count, error rate, CPU",
+      "reason": "Needed to confirm or reject the postgres‑orders infrastructure failure hypothesis (H2).",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "orders-service, portfolio-service, market-data-service error_rate, latency, saturation",
+      "reason": "Would pinpoint which service’s SLO broke first and validate cascade direction.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "service-mesh sidecar / CNI logs",
+      "reason": "Required to evaluate a cluster‑wide network glitch (H4).",
+      "id": "GAP-3",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "portfolio-service code path after DB error",
+      "reason": "To understand why portfolio‑service logs gRPC failures to market‑data‑service rather than DB errors.",
+      "id": "GAP-4",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Rollback orders‑service to v2.15.2 (or disable the new batch fee‑lookup feature via feature flag).",
+      "rationale": "Removes the only change that coincides with the onset; should stop the DB connection storm.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Temporarily increase postgres‑orders max_connections / connection‑pool limits and enable verbose logging (log_min_messages = WARNING).",
+      "rationale": "Mitigates immediate symptom while root cause is fixed; provides data for H2 verification.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Add per‑service error‑rate and latency alerts for orders‑service, portfolio‑service, market‑data‑service.",
+      "rationale": "Earlier detection of upstream degradation; currently only edge‑gateway is alerted.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "fix",
+      "description": "Deploy a canary of v2.16.0 with the batch lookup guarded by a feature flag; monitor DB connection metrics.",
+      "rationale": "Allows safe re‑enable after confirming the regression is fixed.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Post‑mortem: capture missing telemetry (postgres metrics, service‑mesh traces) and add them to the observability stack.",
+      "rationale": "Closes gaps for future incidents.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Review fee‑schedule lookup implementation for connection‑pool misuse (e.g., opening a new pool per request).",
+      "rationale": "Prevents recurrence of the same regression.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "What is the exact DB‑side cause of the connection resets (max_connections exhaustion, idle timeout, network glitch)?",
+    "Why does portfolio‑service surface gRPC failures to market‑data‑service instead of PostgreSQL errors after a DB reset?",
+    "Did a subtle network or service‑mesh event occur at 11:15 affecting only the three observed paths?",
+    "Does the v2.16.0 diff contain other code paths that also touch postgres‑orders besides the batch fee‑schedule lookup?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 10,
+    "tool_calls": 8,
+    "tokens": 72017,
+    "elapsed_s": 302.51
+  }
+}

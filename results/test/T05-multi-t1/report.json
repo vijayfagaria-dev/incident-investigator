@@ -1,0 +1,490 @@
+{
+  "incident_id": "T05",
+  "title": "Nobody can log in",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "All login and token‑refresh requests began failing at ~06:00 UTC because the TLS certificate used by auth‑service expired at 2026‑10‑09T06:00:00Z. Edge‑gateway logs show a sharp rise in TLS handshake failures citing that exact notAfter time, and the critic accepted this hypothesis (HYP‑1) with high confidence (0.88). The investigation is conclusive, but the certificate’s expiry has not been independently confirmed via a secret‑rotation or cert‑management change record, and several observability gaps (missing az‑b logs, connection‑pool metrics, possible secret‑rotation events) remain.",
+  "root_cause": {
+    "service": "auth-service",
+    "category": "certificate_or_credential",
+    "trigger": null
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "auth-service",
+          "category": "certificate_or_credential",
+          "trigger": null
+        },
+        "mechanism": "The auth-service TLS certificate expired at 2026-10-09T06:00:00Z. When edge-gateway attempted new TLS handshakes to auth-service after that time, the handshakes failed with “certificate notAfter 2026-10-09T06:00:00Z”, causing a sharp rise in 5xx errors on POST /v1/session.",
+        "supporting": [
+          "OBS-9",
+          "OBS-10",
+          "OBS-17",
+          "OBS-11",
+          "OBS-18"
+        ],
+        "contradicting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-7",
+          "OBS-8",
+          "OBS-13",
+          "OBS-16"
+        ],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "Auth-service certificate metadata shows notAfter = 2026-10-09T06:00:00Z and no renewal event before that time.",
+          "Edge-gateway logs show no connection‑reset or broken‑pipe errors, only TLS handshake failures."
+        ],
+        "confidence": 0.88,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.88,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": "accept",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "Certificate metadata (notAfter field) has not been independently verified via a secret‑rotation or cert‑management change record; the conclusion rests on log messages that cite the expiry time.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "edge-gateway",
+          "category": "config_change",
+          "trigger": "chg:2541"
+        },
+        "mechanism": "The gateway config change at 05:52:30 UTC raised upstream.keepalive_timeout_s from 60 s to 75 s. Idle HTTP/TCP connections to auth-service were kept alive longer than auth-service’s inbound idle‑timeout, causing auth-service to close them. The gateway then reused stale connections, leading to TLS handshake failures (or connection resets) and a rise in 5xx error rate starting ~06:00 UTC.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-7",
+          "OBS-8",
+          "OBS-13",
+          "OBS-16",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5"
+        ],
+        "contradicting": [
+          "OBS-9",
+          "OBS-10",
+          "OBS-17",
+          "OBS-12",
+          "OBS-19"
+        ],
+        "assumptions": [
+          "ASM-3",
+          "ASM-4",
+          "ASM-5"
+        ],
+        "predictions": [
+          "Edge‑gateway upstream connection‑pool metrics show a rise in idle connections and connection‑reset counters after 05:52.",
+          "Auth‑service inbound idle‑timeout is ≤ 60 s."
+        ],
+        "confidence": 0.32,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.32,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Logs from both services report TLS handshake failures due to an expired certificate (notAfter 2026‑10‑09T06:00:00Z). The hypothesis attributes failures to stale connections caused by a keepalive change, which would manifest as connection resets, not certificate‑expiry errors.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "The claim that raising upstream.keepalive_timeout_s to 75 s causes TLS handshake failures is not backed by any log or metric showing connection‑reset or pool‑exhaustion events.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "config on edge-gateway at 05:52:30 UTC by platform-bot: Raise upstream keepalive timeout (upstream.keepalive_timeout_s: 60 -> 75)",
+      "artifacts": [
+        "chg:2541"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-1",
+      "source": "change-census"
+    },
+    {
+      "statement": "Only change in the window is chg:2541 – edge‑gateway config raising upstream.keepalive_timeout_s from 60 to 75 at 05:52:30 UTC.",
+      "artifacts": [
+        "chg:2541"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-2",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "edge‑gateway has a hard HTTP dependency on auth‑service (timeout 1000 ms).",
+      "artifacts": [
+        "dep:edge-gateway->auth-service"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-3",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "auth‑service has a hard Redis dependency on redis‑cache (timeout 200 ms).",
+      "artifacts": [
+        "dep:auth-service->redis-cache"
+      ],
+      "service": "auth-service",
+      "id": "OBS-4",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "The login request path follows the hard‑dependency chain edge‑gateway → auth‑service → redis‑cache.",
+      "artifacts": [
+        "dep:edge-gateway->auth-service",
+        "dep:auth-service->redis-cache"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-5",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "The config change (chg:2541) occurred ~8 minutes before the first reported login failures (~06:00 UTC), making it a plausible cause.",
+      "artifacts": [
+        "chg:2541"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-7",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "The changed setting controls how long edge‑gateway keeps idle HTTP connections to upstreams; increasing it to 75 s may keep connections alive longer than auth‑service expects, leading to upstream‑side connection drops.",
+      "artifacts": [
+        "chg:2541"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-8",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "Edge‑gateway logs show 1,181 TLS handshake failures with auth‑service starting at 2026-10-09T06:00:09.657Z, citing a certificate notAfter 2026-10-09T06:00:00Z.",
+      "artifacts": [
+        "log:6a1c72fa74da"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-9",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Auth‑service logs record 907 TLS handshake errors (“remote error: tls: bad certificate”) from gateway IPs starting at 2026-10-09T06:00:06.184Z.",
+      "artifacts": [
+        "log:be1de505ee3a"
+      ],
+      "service": "auth-service",
+      "id": "OBS-10",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Edge‑gateway error_rate rises from a baseline mean of 0.0020 to a window mean of 0.0401 (max 0.1275) during the incident window.",
+      "artifacts": [
+        "metric:edge-gateway/error_rate"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-11",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Edge‑gateway latency_p99_ms remains near its baseline (baseline 343 ms, window mean 339.5 ms), indicating latency is not the primary symptom.",
+      "artifacts": [
+        "metric:edge-gateway/latency_p99_ms"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-12",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Only change in window was edge-gateway config at 05:52:30 raising upstream.keepalive_timeout_s from 60 to 75.",
+      "artifacts": [
+        "chg:2541"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-13",
+      "source": "r1-dependency-3"
+    },
+    {
+      "statement": "Increasing keepalive timeout makes idle connections stay open longer, potentially exhausting gateway upstream pool or auth-service connection limits.",
+      "artifacts": [
+        "chg:2541"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-16",
+      "source": "r1-dependency-3"
+    },
+    {
+      "statement": "Edge‑gateway logs record 1,428 TLS handshake failures with auth‑service beginning at 2026-10-09T06:00:09.657Z (certificate notAfter 2026-10-09T06:00:00Z).",
+      "artifacts": [
+        "log:6a1c72fa74da"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-17",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "Edge‑gateway error_rate rises from a baseline mean of 0.00204 to a window mean of 0.08244 (max 0.1331) after ~06:00 UTC.",
+      "artifacts": [
+        "metric:edge-gateway/error_rate"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-18",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "Edge‑gateway latency_p99_ms remains near its baseline (baseline 338.9 ms, window mean 341.2 ms), indicating latency is not the primary symptom.",
+      "artifacts": [
+        "metric:edge-gateway/latency_p99_ms"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-19",
+      "source": "r1-observability-4"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The auth-service TLS certificate was set to expire at 2026-10-09T06:00:00Z and was not rotated or renewed before that moment.",
+      "reason": "Log lines from both gateway and auth-service explicitly cite a certificate notAfter timestamp of 2026-10-09T06:00:00Z, and no change record shows a cert rotation.",
+      "id": "ASM-1",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "Edge-gateway validates the peer certificate on every new TLS handshake (does not cache a validated cert for the life of a keep-alive connection).",
+      "reason": "Standard TLS client behaviour; required for the certificate‑expiry hypothesis to produce immediate handshake failures.",
+      "id": "ASM-2",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "Auth-service’s inbound HTTP idle‑timeout is ≤ 60 s, so a gateway keep‑alive of 75 s would exceed it.",
+      "reason": "Typical default idle timeouts for HTTP servers are 60 s or less; needed for the keep‑alive‑mismatch mechanism.",
+      "id": "ASM-3",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "Edge-gateway re‑uses a keep‑alive connection for a new request without performing a fresh TLS handshake (i.e., it resumes the TLS session).",
+      "reason": "HTTP/1.1 keep‑alive with TLS session resumption is common in NGINX/Envoy‑style gateways; required for H2/H3 mechanisms.",
+      "id": "ASM-4",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The gateway’s TLS session resumption does not validate the peer certificate’s notAfter field on resume.",
+      "reason": "If the gateway re‑validated on resume, an expired cert would be caught even on resumed sessions, making H3 unnecessary.",
+      "id": "ASM-5",
+      "source": "r1-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "get_change_history",
+      "scope": "auth-service inbound HTTP keepalive/idle‑timeout configuration",
+      "reason": "Not captured as a recorded change; needed to determine if upstream timeout mismatch exists.",
+      "id": "GAP-1",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "observability",
+      "scope": "edge‑gateway upstream connection pool stats (active/idle connections, queue length) around 05:52‑06:30 UTC",
+      "reason": "Would reveal whether the longer keepalive caused connection exhaustion.",
+      "id": "GAP-2",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "observability",
+      "scope": "redis‑cache health metrics (CPU, memory, eviction rate) for 05:50‑06:30 UTC",
+      "reason": "Even without recorded changes, a latent resource issue could surface simultaneously.",
+      "id": "GAP-3",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "any feature‑flag or runtime config toggle on edge‑gateway affecting keepalive behavior",
+      "reason": "Such toggles may not appear as a config change but could interact with the timeout setting.",
+      "id": "GAP-4",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "auth-service metrics (error_rate, latency_p99_ms, cpu_util, mem_util, connection pool) for 2026-10-09T05:15Z‑06:25Z",
+      "reason": "Tool step limit reached; need auth‑service metric series to confirm service‑side saturation or error spikes.",
+      "id": "GAP-5",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "redis-cache metrics (error_rate, latency, connection count) for 2026-10-09T05:15Z‑06:25Z",
+      "reason": "Tool step limit reached; need redis‑cache data to verify the auth‑service → redis hop.",
+      "id": "GAP-6",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "redis-cache logs at WARN/ERROR for 2026-10-09T05:15Z‑06:25Z",
+      "reason": "Tool step limit reached; no log visibility on redis‑cache to rule out downstream failures.",
+      "id": "GAP-7",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "service=edge-gateway, start=2026-10-09T05:15:00Z, end=2026-10-09T06:25:00Z",
+      "reason": "log shard for az-b is unavailable; results exclude pods in az-b",
+      "id": "GAP-8",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "service=auth-service, start=2026-10-09T05:15:00Z, end=2026-10-09T06:25:00Z",
+      "reason": "log shard for az-b is unavailable; results exclude pods in az-b",
+      "id": "GAP-9",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "metrics",
+      "scope": "edge-gateway upstream connection pool usage and auth-service inbound connections",
+      "reason": "Not available in change-census or dependency data",
+      "id": "GAP-10",
+      "source": "r1-dependency-3"
+    },
+    {
+      "tool": "logs",
+      "scope": "edge-gateway and auth-service logs around 05:55-06:15",
+      "reason": "Only responder notes are available",
+      "id": "GAP-11",
+      "source": "r1-dependency-3"
+    },
+    {
+      "tool": "config",
+      "scope": "gateway upstream connection pool limits and auth-service max_connections settings",
+      "reason": "Not captured in current tooling",
+      "id": "GAP-12",
+      "source": "r1-dependency-3"
+    },
+    {
+      "tool": "changes",
+      "scope": "any secret rotation or TLS cert change for gateway-auth link outside queried services",
+      "reason": "Change census limited to edge-gateway and auth-service",
+      "id": "GAP-13",
+      "source": "r1-dependency-3"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "edge-gateway logs from availability zone az‑b",
+      "reason": "Log shard for az‑b is unavailable; results exclude pods in that zone, so connection‑reset evidence from those pods is missing.",
+      "id": "GAP-14",
+      "source": "r1-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "edge-gateway upstream connection error counters (reset, broken pipe)",
+      "reason": "No such metric series is exposed in the current metric catalog, preventing direct quantification of connection‑reset events.",
+      "id": "GAP-15",
+      "source": "r1-observability-4"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "service=edge-gateway, start=2026-10-09T05:50:00Z, end=2026-10-09T06:30:00Z",
+      "reason": "log shard for az-b is unavailable; results exclude pods in az-b",
+      "id": "GAP-16",
+      "source": "r1-observability-4"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Deploy a valid TLS certificate to auth‑service (or restart auth‑service with a renewed cert) to restore successful TLS handshakes on the gateway‑auth link.",
+      "rationale": "Handshake failures are directly caused by the expired certificate (HYP‑1). Restoring a valid cert will immediately stop the 5xx errors on POST /v1/session.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Update the certificate‑rotation pipeline for auth‑service to renew certificates well before their notAfter date and add automated pre‑expiry checks.",
+      "rationale": "The root cause is an unrotated certificate; fixing the rotation process prevents recurrence.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add monitoring and alerting on TLS certificate expiration for all services that terminate TLS (auth‑service, edge‑gateway) and on the secret‑management system.",
+      "rationale": "Early detection of upcoming expirations will stop future outages of this class.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Verify the auth‑service certificate metadata (notAfter field) against the secret‑rotation / cert‑management change log to confirm the exact expiry time.",
+      "rationale": "Critic noted a minor gap: the conclusion rests on log messages that cite the expiry time, not an independent change record (GAP‑13).",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Retrieve missing edge‑gateway and auth‑service logs from availability zone az‑b (log shards currently unavailable) to ensure no additional error patterns exist.",
+      "rationale": "Log gaps (GAP‑8, GAP‑9, GAP‑14, GAP‑16) could hide connection‑reset or other anomalies.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Collect edge‑gateway upstream connection‑pool metrics (active/idle connections, queue length, reset counters) and auth‑service inbound connection metrics for the 05:50‑06:30 UTC window.",
+      "rationale": "Gaps GAP‑2, GAP‑10, GAP‑15 prevent ruling out connection‑exhaustion effects from the keepalive change.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Search for any secret‑rotation or TLS‑cert change events for the gateway‑auth link outside the queried services (e.g., in a central cert manager).",
+      "rationale": "GAP‑13 notes change‑census was limited to edge‑gateway and auth‑service; a rotation elsewhere could explain the expiry.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    }
+  ],
+  "open_questions": [
+    "Exact certificate metadata (notAfter) from the secret‑management system – has it been independently verified?",
+    "Why did the certificate expire without an automated renewal or alert?",
+    "What do the missing az‑b logs (edge‑gateway and auth‑service) show for the incident window?",
+    "What were the edge‑gateway upstream connection‑pool statistics and auth‑service inbound connection counts during 05:50‑06:30 UTC?",
+    "Were there any secret‑rotation or cert‑change events for the gateway‑auth TLS link recorded outside the edge‑gateway/auth‑service change census?",
+    "Redis‑cache health (CPU, memory, eviction rate) during the window – could a downstream issue have contributed?"
+  ],
+  "termination": "the critic accepted HYP-1",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 24,
+    "tool_calls": 12,
+    "tokens": 97634,
+    "elapsed_s": 601.04
+  }
+}

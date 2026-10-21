@@ -1,0 +1,384 @@
+{
+  "incident_id": "T04",
+  "title": "Some order placements failing",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "At 15:22 UTC the feature flag new_pricing_path was rolled out to 20 % of accounts (chg:2534). Shortly afterward orders‑service began logging ArithmeticException: “Non‑terminating decimal expansion” from the new code path PricingPathV2.applyCollar, and the error rate rose from ~0.2 % to >3 % matching the flag’s rollout percentage. The critic accepted HYP‑1 (confidence 0.88) as the root cause and rejected the alternative hypotheses. The investigation is therefore conclusive, but we still lack visibility into whether the external quotes‑vendor ever emits malformed price payloads and we have no DEBUG/INFO logs or vendor metrics to confirm or rule that out.",
+  "root_cause": {
+    "service": "orders-service",
+    "category": "code_regression",
+    "trigger": "chg:2534"
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "code_regression",
+          "trigger": "chg:2534"
+        },
+        "mechanism": "The feature flag new_pricing_path enables a new code path (PricingPathV2.applyCollar). For certain price values the new logic performs a division that yields a non‑terminating decimal, causing an ArithmeticException that bubbles up as a 5xx response. Only the 20 % of accounts with the flag enabled hit this path, matching the observed failure share.",
+        "supporting": [
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-10"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "Error rate for requests with new_pricing_path=on should be >0 while flag=off remains at baseline.",
+          "Disabling the flag (rollback to 0 %) should immediately stop the ArithmeticException logs."
+        ],
+        "confidence": 0.88,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.88,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": "accept",
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "An external quotes‑vendor change (not visible in internal change census) began emitting malformed price payloads (e.g., repeating‑decimal values). The new pricing path in orders‑service processes these payloads and throws the same ArithmeticException, but the old path tolerates them. Because the flag was rolled out at the same time, only flagged accounts surface the error.",
+        "supporting": [
+          "OBS-11",
+          "OBS-12",
+          "OBS-13"
+        ],
+        "contradicting": [
+          "OBS-4",
+          "OBS-10",
+          "OBS-9"
+        ],
+        "assumptions": [
+          "ASM-3",
+          "ASM-4"
+        ],
+        "predictions": [
+          "Market‑data service logs should show malformed price fields (non‑terminating decimals) arriving after ~15:20.",
+          "If the flag is turned off, error rate should drop to baseline even though vendor payloads remain malformed."
+        ],
+        "confidence": 0.22,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.22,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "No vendor‑payload validation logs or metrics are available to confirm malformed price values; GAP‑7 (DEBUG/INFO logs not captured) and GAP‑8 (vendor exposes no metrics) leave this unverified.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "auth-service",
+          "category": "config_change",
+          "trigger": "chg:2536"
+        },
+        "mechanism": "Reducing token.refresh_grace_s from 120 s to 90 s causes token‑refresh failures for a subset of clients that happen to be on the new pricing path, leading to downstream 5xx from orders‑service.",
+        "supporting": [
+          "OBS-1",
+          "OBS-6"
+        ],
+        "contradicting": [
+          "OBS-9",
+          "OBS-10"
+        ],
+        "assumptions": [
+          "ASM-5"
+        ],
+        "predictions": [
+          "Auth‑service should log increased token‑refresh rejections after 15:05.",
+          "Error rate should be evenly distributed across all accounts, not limited to the 20 % flagged."
+        ],
+        "confidence": 0.04,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.04,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Observations OBS‑9 and OBS‑10 directly contradict the hypothesis: auth‑service is not on the failing path and the error subset matches the feature‑flag rollout, not an auth‑token issue.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "config on auth-service at 15:05:40 UTC by config-bot: Lower token refresh grace period (token.refresh_grace_s: 120 -> 90)",
+      "artifacts": [
+        "chg:2536"
+      ],
+      "service": "auth-service",
+      "id": "OBS-1",
+      "source": "change-census"
+    },
+    {
+      "statement": "feature_flag on orders-service at 15:22:07 UTC by lena.fischer: Roll out new_pricing_path to 20% of accounts (flag: new_pricing_path, rollout: 0% -> 20%)",
+      "artifacts": [
+        "chg:2534"
+      ],
+      "service": "orders-service",
+      "id": "OBS-2",
+      "source": "change-census"
+    },
+    {
+      "statement": "orders-service error_rate rose from a baseline mean of 0.001966 to 0.02187 at 15:22 UTC and continued climbing to 0.03637 by 15:49 UTC.",
+      "artifacts": [
+        "metric:orders-service/error_rate"
+      ],
+      "service": "orders-service",
+      "id": "OBS-3",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Log pattern “order <order> failed: ArithmeticException: Non‑terminating decimal expansion; no exact representable decimal result (at PricingPathV2.applyCollar)” first appears at 2026‑10‑08T15:23:00.702Z and occurs 340 times through 15:49 UTC.",
+      "artifacts": [
+        "log:e56c11822899"
+      ],
+      "service": "orders-service",
+      "id": "OBS-4",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Feature flag new_pricing_path was rolled out to 20 % of accounts at 2026‑10‑08T15:22:07Z.",
+      "artifacts": [
+        "chg:2534"
+      ],
+      "service": "orders-service",
+      "id": "OBS-5",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Auth‑service config change (token.refresh_grace_s 120→90) occurred at 2026‑10‑08T15:05:40Z, well before the error spike.",
+      "artifacts": [
+        "chg:2536"
+      ],
+      "service": "auth-service",
+      "id": "OBS-6",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Auth-service config change (token.refresh_grace_s 120→90) at 15:05 UTC (chg:2536) is not on the failing path; auth-service does not appear as a downstream dependency of orders-service.",
+      "artifacts": [
+        "chg:2536",
+        "dep:orders-service->market-data-service",
+        "dep:orders-service->postgres-orders"
+      ],
+      "service": "auth-service",
+      "id": "OBS-9",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "Feature flag new_pricing_path on orders-service was rolled out from 0 % to 20 % at 15:22 UTC (chg:2534); symptom onset at ~15:25 UTC and only a subset of customers affected, matching the rollout percentage.",
+      "artifacts": [
+        "chg:2534"
+      ],
+      "service": "orders-service",
+      "id": "OBS-10",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "market-data-service logged WARN messages “quotes-vendor responded 429; backing off <ms>ms” six times, first at 2026-10-08T14:42:13.873Z and last at 2026-10-08T15:46:30.422Z.",
+      "artifacts": [
+        "log:706d3b8ae4bd"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-11",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "market-data-service logged ERROR responses “GET /v1/quotes/{symbol} 502 27ms” twice, at 2026-10-08T14:44:33.958Z and 2026-10-08T14:44:50.789Z.",
+      "artifacts": [
+        "log:cf20f569a90e"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-12",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "market-data-service vendor_error_rate metric averaged 0.00104 over the interval, above its baseline mean of 0.000967, indicating a slight increase in vendor‑side errors.",
+      "artifacts": [
+        "metric:market-data-service/vendor_error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-13",
+      "source": "r1-observability-3"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "PricingPathV2.applyCollar performs a division/rounding that can produce a non‑terminating decimal for certain price inputs.",
+      "reason": "The observed ArithmeticException message matches Java's BigDecimal behavior when a non‑terminating decimal expansion occurs.",
+      "id": "ASM-1",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The feature flag new_pricing_path only controls execution of the new pricing path; the legacy path remains unchanged.",
+      "reason": "Standard feature‑flag rollout pattern; no evidence of other code changes at the same time.",
+      "id": "ASM-2",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "A malformed price payload (e.g., a repeating decimal) from quotes‑vendor can trigger the same ArithmeticException when processed by the new pricing code.",
+      "reason": "The exception originates in pricing logic that consumes vendor prices; a bad payload is a plausible trigger.",
+      "id": "ASM-3",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The external quotes‑vendor may have deployed a configuration or schema change around 15:15‑15:30 that is not captured in internal change history.",
+      "reason": "GAP‑4 notes external vendor changes are invisible to our change census.",
+      "id": "ASM-4",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The new pricing path might call an authenticated endpoint that now rejects tokens refreshed under the tighter grace period.",
+      "reason": "Speculative link between auth config change and new code path; no direct evidence.",
+      "id": "ASM-5",
+      "source": "r1-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_logs",
+      "scope": "market-data-service, edge-gateway, postgres-orders, auth-service (WARN+ patterns) 14:40‑15:50 UTC",
+      "reason": "Tool step limit reached; downstream logs not retrieved.",
+      "id": "GAP-1",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "Full metric summaries for market-data-service, edge-gateway, postgres-orders, auth-service 14:40‑15:50 UTC",
+      "reason": "Tool step limit reached; downstream metrics not retrieved.",
+      "id": "GAP-2",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "Per‑minute latency/error series for orders-service downstream calls (e.g., market‑data client latency) 15:20‑15:35 UTC",
+      "reason": "Metric not available in current dataset; would require service‑specific instrumentation.",
+      "id": "GAP-3",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "External vendor quotes-vendor",
+      "reason": "Change census only covers internal services; an outage or config change at quotes-vendor would not appear.",
+      "id": "GAP-4",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_service_dependencies",
+      "scope": "Depth limited to 2 hops",
+      "reason": "Potential indirect dependencies beyond two hops (e.g., auth-service via a shared library) were not examined.",
+      "id": "GAP-5",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Secret rotations on redis-cache or postgres-orders",
+      "reason": "Secret rotations may be logged in a separate audit system not queried by the change‑history endpoint.",
+      "id": "GAP-6",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "quotes-vendor DEBUG/INFO level logs for price payload validation",
+      "reason": "Only WARN+ patterns were queried; lower‑severity logs that could reveal malformed or stale prices were not captured.",
+      "id": "GAP-7",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "quotes-vendor latency, error, and payload‑validation metrics",
+      "reason": "quotes-vendor exposes no metrics in the monitoring system, so quantitative vendor health cannot be assessed.",
+      "id": "GAP-8",
+      "source": "r1-observability-3"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Disable the new_pricing_path feature flag (roll back to 0 %) to stop the ArithmeticException errors immediately.",
+      "rationale": "The flag rollout correlates exactly with the error spike; turning it off removes the faulty code path for all users.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Patch PricingPathV2.applyCollar to handle non‑terminating decimal results (e.g., use BigDecimal with a defined rounding mode or guard against division that yields repeating decimals).",
+      "rationale": "The exception originates from a division that can produce a non‑terminating decimal for certain price values; fixing the arithmetic eliminates the root cause.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add automated unit/integration tests covering edge‑case price values that trigger non‑terminating decimals, and enforce a pre‑rollout checklist for feature‑flag changes including error‑rate monitoring.",
+      "rationale": "Testing the problematic arithmetic and gating flag rollouts on error‑rate alerts will prevent regression.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Enable DEBUG/INFO logging on the quotes‑vendor integration (or request vendor payload samples) to determine whether malformed price values are ever sent.",
+      "rationale": "GAP‑7 notes that lower‑severity logs were not captured; confirming or disproving vendor‑side malformed payloads closes the remaining uncertainty around HYP‑2.",
+      "hypothesis_id": "HYP-2",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Establish a metrics contract with the quotes‑vendor (latency, error, payload‑validation metrics) or implement a wrapper that validates price payload schema before processing.",
+      "rationale": "GAP‑8 shows the vendor exposes no metrics; without visibility we cannot fully rule out external data quality issues.",
+      "hypothesis_id": "HYP-2",
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Does the external quotes‑vendor occasionally emit price values that cause non‑terminating decimal expansions?",
+    "Are there any secret rotations or indirect dependencies (beyond two hops) that could affect orders‑service behavior?",
+    "What are the full downstream latency/error metrics for market‑data‑service calls during the incident window (GAP‑1, GAP‑2, GAP‑3)?"
+  ],
+  "termination": "the critic accepted HYP-1",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 19,
+    "tool_calls": 12,
+    "tokens": 71025,
+    "elapsed_s": 469.54
+  }
+}

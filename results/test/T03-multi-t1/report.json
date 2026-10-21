@@ -1,0 +1,567 @@
+{
+  "incident_id": "T03",
+  "title": "Portfolio and order pages slow, users logged out",
+  "outcome": "inconclusive",
+  "outcome_reasons": [
+    "HYP-1 and HYP-2 are too close to tell apart"
+  ],
+  "summary": "Starting around 10:13 UTC the portfolio and order APIs slowed dramatically (portfolio‑service p99 > 2.5 s) and a subset of users were forced to log out. postgres‑orders CPU rose to ~100 % and active connections more than doubled. Two plausible root causes were identified but could not be distinguished: (HYP‑1) a work_mem increase from 4 MiB to 8 MiB at 09:31 that may have caused the planner to choose CPU‑heavy hash/sort plans, and (HYP‑2) a Redis master failover at 10:12 that promoted a replica before it finished resync, leaving the keyspace empty and causing auth‑service session misses. Evidence for each hypothesis exists (config change, CPU/connection metrics, Redis failover logs, auth‑service “session not found” logs) but key observability gaps (pg_stat_statements, Redis key‑count/replication‑lag, per‑minute service latency series) remain unfilled. The investigation stopped after two rounds, leaving the outcome inconclusive.",
+  "root_cause": null,
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "postgres-orders",
+          "category": "config_change",
+          "trigger": "chg:2519"
+        },
+        "mechanism": "Increasing work_mem from 4 MiB to 8 MiB at 09:31 caused the planner to choose hash-/sort‑based plans for reporting‑type queries. Those plans consume substantially more CPU per execution, lengthening query runtime. Longer queries raise active connections (OBS‑4) and query latency (OBS‑5), which propagates through the hard SQL dependencies of orders‑service (OBS‑19) and portfolio‑service (OBS‑20), producing their latency (OBS‑6, OBS‑8) and error‑rate (OBS‑7, OBS‑9) increases and downstream gateway time‑outs (OBS‑17).",
+        "supporting": [
+          "OBS-1",
+          "OBS-18",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-19",
+          "OBS-20",
+          "OBS-6",
+          "OBS-7",
+          "OBS-8",
+          "OBS-9",
+          "OBS-17"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-6",
+          "ASM-7",
+          "ASM-8"
+        ],
+        "predictions": [
+          "pg_stat_statements will show a reporting‑type query whose total_exec_time and sort_spill_count/temp_file_bytes jump sharply after 09:31.",
+          "Reverting work_mem to 4 MiB should bring cpu_util back toward baseline (~0.35) and collapse active_connections within minutes."
+        ],
+        "confidence": 0.55,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.55,
+      "calibration": [],
+      "confidence_band": "medium",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "Missing pg_stat_statements / slow‑query metrics for postgres‑orders after the work_mem change; without them we cannot verify the planner‑plan shift claimed by the hypothesis.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "unsupported_claim",
+          "severity": "minor",
+          "detail": "The hypothesis asserts that raising work_mem caused the planner to choose hash/sort plans, but no observation (plan change, sort‑spill, temp‑file usage) supports this claim.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "redis-cache",
+          "category": "infrastructure_failure",
+          "trigger": "log:f58ca7278052"
+        },
+        "mechanism": "The Redis master (redis‑cache‑0) was marked down at 10:12:03 (OBS‑13). Sentinel promoted replica redis‑cache‑1 at 10:12:37 (OBS‑15) before it completed full resync, so it began serving from an empty keyspace at 10:12:31 (OBS‑14). auth‑service reads session tokens from Redis; missing keys cause it to log “session <id> not found in redis; forcing re‑login” (OBS‑16, 665 occurrences) and return 401/redirect, which users experience as forced logouts. This chain is independent of the postgres‑orders overload (auth‑service error rate barely moves, OBS‑12).",
+        "supporting": [
+          "OBS-13",
+          "OBS-14",
+          "OBS-15",
+          "OBS-16",
+          "OBS-12"
+        ],
+        "contradicting": [
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-6",
+          "OBS-7",
+          "OBS-8",
+          "OBS-9"
+        ],
+        "assumptions": [
+          "ASM-9",
+          "ASM-10",
+          "ASM-11"
+        ],
+        "predictions": [
+          "Redis key‑count metric will drop to near‑zero at 10:12:31 and stay low until the former master finishes resync.",
+          "Auth‑service session‑lookup latency (p99) will spike exactly at the failover timestamp (10:12:31‑10:12:37) and remain elevated while the keyspace is empty."
+        ],
+        "confidence": 0.48,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.48,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "names log:f58ca7278052 as the trigger, but no change-history query returned it",
+          "alternative": null,
+          "source": "rule"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "payments-service",
+          "category": "code_regression",
+          "trigger": "chg:2522"
+        },
+        "mechanism": "The payments‑service deploy could have introduced a code path that calls orders‑service (or directly postgres‑orders) for reporting, adding load that coincides with the DB CPU spike. No dependency is currently documented, so this remains speculative.",
+        "supporting": [
+          "OBS-2"
+        ],
+        "contradicting": [
+          "OBS-19",
+          "OBS-20",
+          "OBS-21"
+        ],
+        "assumptions": [
+          "ASM-5"
+        ],
+        "predictions": [
+          "Tracing from payments‑service would reveal new outbound calls to orders‑service or postgres‑orders after 09:58."
+        ],
+        "confidence": 0.12,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.12,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "The dependency graph (OBS‑19, OBS‑20, OBS‑21) shows no path from payments‑service to postgres‑orders, yet the hypothesis assumes such a path exists.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "config on postgres-orders at 09:31:44 UTC by marta.silva: Raise work_mem for reporting queries (work_mem: 4MB -> 8MB, applied: reload)",
+      "artifacts": [
+        "chg:2519"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-1",
+      "source": "change-census"
+    },
+    {
+      "statement": "deploy on payments-service at 09:58:10 UTC by ci/deploy-bot: payments-service v7.3.1: update bank-rails client (version: 7.3.1, previous_version: 7.3.0, commit: 52e9b14, diff: +64 / -30)",
+      "artifacts": [
+        "chg:2522"
+      ],
+      "service": "payments-service",
+      "id": "OBS-2",
+      "source": "change-census"
+    },
+    {
+      "statement": "postgres‑orders CPU utilization spikes from 0.34 (baseline 0.339) at 10:09 to 0.57 at 10:12 and reaches 0.97 by 10:15, remaining >0.95 through 10:40.",
+      "artifacts": [
+        "metric:postgres-orders/cpu_util"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-3",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "postgres‑orders active connections rise from a baseline mean of 73.3 to a mean of 118.8 and a last value of 175 at 10:40.",
+      "artifacts": [
+        "metric:postgres-orders/active_connections"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-4",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "postgres‑orders query p99 latency increases from a baseline of 17.6 ms to a mean of 338.7 ms and a last value of 1067 ms at 10:40.",
+      "artifacts": [
+        "metric:postgres-orders/query_latency_p99_ms"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-5",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "portfolio‑service p99 latency rises from a baseline of 424 ms to a mean of 1274 ms and a last value of 2780 ms at 10:40.",
+      "artifacts": [
+        "metric:portfolio-service/latency_p99_ms"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-6",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "portfolio‑service error rate climbs from a baseline of 0.22 % to a mean of 1.87 % and a last value of 4.78 % at 10:40.",
+      "artifacts": [
+        "metric:portfolio-service/error_rate"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-7",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "orders‑service p99 latency rises from a baseline of 253 ms to a mean of 795 ms and a last value of 1606 ms at 10:40.",
+      "artifacts": [
+        "metric:orders-service/latency_p99_ms"
+      ],
+      "service": "orders-service",
+      "id": "OBS-8",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "orders‑service error rate climbs from a baseline of 0.18 % to a mean of 0.79 % and a last value of 2.48 % at 10:40.",
+      "artifacts": [
+        "metric:orders-service/error_rate"
+      ],
+      "service": "orders-service",
+      "id": "OBS-9",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "auth‑service error rate shows only a slight increase (baseline 0.18 % → last 0.29 %).",
+      "artifacts": [
+        "metric:auth-service/error_rate"
+      ],
+      "service": "auth-service",
+      "id": "OBS-12",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Redis master cache redis‑cache‑0 was marked down by sentinel at 2026‑10‑07T10:12:03.988Z and 2026‑10‑07T10:12:05.847Z.",
+      "artifacts": [
+        "log:f58ca7278052"
+      ],
+      "service": "redis-cache",
+      "id": "OBS-13",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "A replica was promoted but had not finished full resync; it began serving from an empty keyspace at 2026‑10‑07T10:12:31.369Z.",
+      "artifacts": [
+        "log:1eb56e1358d5"
+      ],
+      "service": "redis-cache",
+      "id": "OBS-14",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "Sentinel performed a master switch from redis‑cache‑0 to redis‑cache‑1 at 2026‑10‑07T10:12:37.618Z.",
+      "artifacts": [
+        "log:48f2fea2df36"
+      ],
+      "service": "redis-cache",
+      "id": "OBS-15",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "Auth‑service started logging “session <id> not found in redis; forcing re‑login” at 2026‑10‑07T10:12:36.674Z (665 occurrences through 10:39:52).",
+      "artifacts": [
+        "log:26d7a4550ba6"
+      ],
+      "service": "auth-service",
+      "id": "OBS-16",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "Edge‑gateway began reporting upstream portfolio‑service timeouts (3000 ms) at 2026‑10‑07T10:16:04.412Z (243 occurrences through 10:39:38).",
+      "artifacts": [
+        "log:2710d027f157"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-17",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "postgres-orders config changed: work_mem raised from 4 MiB to 8 MiB at 2026-10-07T09:31:44Z (applied via reload).",
+      "artifacts": [
+        "chg:2519"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-18",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "orders-service has a hard SQL dependency on postgres-orders.",
+      "artifacts": [
+        "dep:orders-service->postgres-orders"
+      ],
+      "service": "orders-service",
+      "id": "OBS-19",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "portfolio-service has a hard SQL dependency on postgres-orders.",
+      "artifacts": [
+        "dep:portfolio-service->postgres-orders"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-20",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "Change history for the window 09:30‑10:40 UTC shows no deployments, config changes, feature‑flag toggles, secret rotations, or infra ops for edge-gateway, orders-service, portfolio-service, auth-service, or redis-cache (only chg:2519 appears).",
+      "artifacts": [
+        "chg:2519"
+      ],
+      "service": null,
+      "id": "OBS-21",
+      "source": "r1-dependency-2"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "Payments‑service might have an undocumented dependency on orders‑service or postgres‑orders.",
+      "reason": "Only speculative; no dependency graph evidence supports it.",
+      "id": "ASM-5",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The postgres‑orders workload includes at least one reporting‑type query (large aggregation/window) whose plan is sensitive to work_mem.",
+      "reason": "No direct query‑plan evidence captured; inferred from CPU surge after work_mem change.",
+      "id": "ASM-6",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "Raising work_mem from 4 MiB to 8 MiB pushes the planner over the cost threshold for that query, causing a switch to a hash‑/sort‑heavy plan.",
+      "reason": "Planner behavior with work_mem is documented; the magnitude of CPU increase suggests a plan change.",
+      "id": "ASM-7",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "No other simultaneous change (deploy, feature flag, secret rotation) touched postgres‑orders or its callers in the 09:30‑10:40 window.",
+      "reason": "Change census (OBS‑21) shows only chg:2519 for the listed services.",
+      "id": "ASM-8",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "auth‑service reads session data synchronously from Redis on each request with no local cache fallback.",
+      "reason": "Typical session‑store pattern; forced‑re‑login logs imply a miss on every lookup.",
+      "id": "ASM-9",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The promoted replica’s empty keyspace persisted at least until the former master finished resync (duration unknown).",
+      "reason": "Sentinel promotion before full resync is documented in OBS‑14/15; resync time not observed.",
+      "id": "ASM-10",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "No auth‑service deploy or config change occurred in the 09:30‑10:12 window.",
+      "reason": "Change census (OBS‑21) lists none for auth‑service.",
+      "id": "ASM-11",
+      "source": "r2-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_logs",
+      "scope": "WARN+ logs for portfolio-service, orders-service, postgres-orders, auth-service between 10:10‑10:20 UTC",
+      "reason": "Log query tool not invoked; needed to see query‑level errors, authentication failures, or pool‑exhaustion messages.",
+      "id": "GAP-1",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "Per‑minute latency_p99_ms and error_rate series for portfolio-service and orders-service",
+      "reason": "Only aggregate summaries were fetched; minute‑level series required to align onset precisely with DB CPU spike.",
+      "id": "GAP-2",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "Portfolio‑service DB connection pool metrics (in‑use, max, waiters)",
+      "reason": "Missing pool telemetry for portfolio-service; could reveal if it is opening many connections that drive postgres‑orders active_connections.",
+      "id": "GAP-3",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "Postgres‑orders pg_stat_statements or slow‑query metrics",
+      "reason": "Needed to identify the specific query patterns responsible for CPU saturation after the work_mem change.",
+      "id": "GAP-4",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "redis-cache (CPU, memory, replication lag, key count) 09:30‑10:40 UTC",
+      "reason": "Metrics not queried; needed to confirm resource pressure or replication lag before failover.",
+      "id": "GAP-5",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "auth-service (request latency, error rate, session‑lookup latency) 09:30‑10:40 UTC",
+      "reason": "Metrics not queried; would show when auth‑service latency spiked relative to Redis outage.",
+      "id": "GAP-6",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "edge-gateway (upstream latency, error rate, 5xx count) 09:30‑10:40 UTC",
+      "reason": "Metrics not queried; would quantify impact of portfolio‑service slowdown on the gateway.",
+      "id": "GAP-7",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Infrastructure operations (replica promotion, instance resize, autoscaling events), feature‑flag toggles, secret rotations for DB credentials or connection‑pool settings",
+      "reason": "Change census only captures service‑level changes; infra‑level actions and flag/secret changes are not recorded there.",
+      "id": "GAP-8",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_service_dependencies",
+      "scope": "Deeper dependency chains beyond depth 2 (e.g., services that call orders-service or portfolio-service)",
+      "reason": "Current depth 2 may miss indirect callers that could generate load on postgres-orders.",
+      "id": "GAP-9",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "redis-cache replication lag",
+      "reason": "Metric not present in the service catalog; cannot assess replica sync state.",
+      "id": "GAP-10",
+      "source": "r2-observability-5"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "redis-cache key count",
+      "reason": "Metric not present in the service catalog; cannot verify empty‑keyspace duration.",
+      "id": "GAP-11",
+      "source": "r2-observability-5"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "auth-service session lookup latency (p99)",
+      "reason": "Metric not present in the service catalog; unable to quantify impact on forced logouts.",
+      "id": "GAP-12",
+      "source": "r2-observability-5"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "postgres-orders per‑minute series (cpu_util, active_connections, query_latency_p99_ms, replication_lag_s) and pg_stat_statements data",
+      "reason": "The metrics endpoint returned only a list of available series; no time‑series points were provided for the requested window.",
+      "id": "GAP-13",
+      "source": "r2-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "orders-service per‑minute latency_p99_ms and error_rate",
+      "reason": "orders-service metrics were not queried within the allowed steps.",
+      "id": "GAP-14",
+      "source": "r2-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "portfolio-service per‑minute latency_p99_ms, error_rate and DB connection‑pool metrics",
+      "reason": "Only aggregate summaries were returned; per‑minute resolution and pool metrics are missing.",
+      "id": "GAP-15",
+      "source": "r2-observability-4"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Revert postgres‑orders work_mem to 4 MiB (or a value proven safe) and reload the configuration.",
+      "rationale": "If HYP‑1 is the driver, lowering work_mem should reduce per‑query CPU and bring active connections back toward baseline within minutes.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Add a pre‑promotion check that the Redis replica has completed full resync (replication lag = 0) before Sentinel promotes it, or pause promotion until sync finishes.",
+      "rationale": "If HYP‑2 is the driver, preventing promotion of an unsynced replica avoids serving an empty keyspace and the resulting forced logouts.",
+      "hypothesis_id": "HYP-2",
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Query pg_stat_statements (or equivalent slow‑query view) for postgres‑orders covering 09:30‑10:40 UTC to identify queries whose total_exec_time, sort_spill_count or temp_file_bytes jump after the work_mem change.",
+      "rationale": "Directly tests the planner‑plan shift claimed by HYP‑1 (gap 4, 13).",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Collect Redis key‑count and replication‑lag metrics for the 09:30‑10:40 UTC window (or enable them if missing) to verify the empty‑keyspace interval after the failover.",
+      "rationale": "Confirms whether the replica served from an empty keyspace and for how long (gaps 10, 11).",
+      "hypothesis_id": "HYP-2",
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Retrieve per‑minute latency_p99_ms and error_rate series for portfolio‑service, orders‑service and edge‑gateway for 09:30‑10:40 UTC.",
+      "rationale": "Aligns the exact onset of service‑level degradation with either the DB CPU spike or the Redis failover (gaps 2, 14, 15, 7).",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Introduce a change‑validation gate for PostgreSQL configuration changes that runs a short‑term canary workload and checks planner choice / CPU impact before wide rollout.",
+      "rationale": "Reduces risk of future work_mem (or similar) changes silently shifting query plans (addresses HYP‑1 recurrence).",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Update Sentinel/Redis failover policy to require full resync (replication lag = 0) before promoting a replica, and add an alert on replica lag exceeding a safe threshold.",
+      "rationale": "Eliminates the class of failure where a partially synced replica serves stale/empty data (addresses HYP‑2 recurrence).",
+      "hypothesis_id": "HYP-2",
+      "urgency": "later"
+    },
+    {
+      "kind": "fix",
+      "description": "Add alerts for postgres‑orders CPU > 80 % sustained for > 2 min and for Redis master health (master down, replica lag > 30 s).",
+      "rationale": "Provides earlier detection of the two failure modes so on‑call can act before user impact escalates.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    }
+  ],
+  "open_questions": [
+    "Which specific query (or query class) caused the CPU surge after the work_mem increase?",
+    "Did the Redis replica truly serve from an empty keyspace, and for how long did key‑count remain near zero?",
+    "What was the auth‑service session‑lookup latency profile around 10:12:31‑10:12:37, and does it correlate with the forced‑logout logs?",
+    "Were there any indirect callers (beyond depth‑2) that began issuing heavy reporting queries to postgres‑orders during the window?",
+    "Did the portfolio‑service connection pool saturate, contributing to the rise in postgres‑orders active connections?"
+  ],
+  "termination": "reached the limit of 2 rounds",
+  "stats": {
+    "rounds": 2,
+    "model_calls": 31,
+    "tool_calls": 18,
+    "tokens": 150755,
+    "elapsed_s": 805.79
+  }
+}

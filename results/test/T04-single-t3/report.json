@@ -1,0 +1,315 @@
+{
+  "incident_id": "T04",
+  "title": "Some order placements failing",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "At 15:22 UTC the feature flag `new_pricing_path` was rolled out to 20% of accounts on `orders-service`. Within a minute the new pricing implementation (`PricingPathV2.applyCollar`) began throwing `ArithmeticException: Non‑terminating decimal expansion` for a subset of orders, causing a sharp rise in 5xx errors (error‑rate from 0.2% to >4%). The failure is consistent for the flagged customers while the remaining 80% succeed. No deploy, config, or infrastructure change coincided; downstream services show no anomalies. Root cause is a code regression in the newly‑enabled pricing path.",
+  "root_cause": {
+    "service": "orders-service",
+    "category": "code_regression",
+    "trigger": "chg:2534"
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "code_regression",
+          "trigger": "chg:2534"
+        },
+        "mechanism": "The newly enabled `PricingPathV2.applyCollar` performs a division that can produce a non‑terminating decimal for certain price/size combinations, throwing an ArithmeticException that bubbles up as a 5xx error for the 20% of accounts with the flag on.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-3",
+          "OBS-7"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "Rolling the flag back to 0% will immediately drop error_rate to baseline.",
+          "Enabling the flag on a test account with a known problematic price reproduces the exception."
+        ],
+        "confidence": 0.92,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.92,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "data_issue",
+          "trigger": null
+        },
+        "mechanism": "Market-data began sending a price value with a non‑terminating decimal representation, which the new pricing path cannot handle, causing the same ArithmeticException.",
+        "supporting": [
+          "OBS-2"
+        ],
+        "contradicting": [
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-6"
+        ],
+        "assumptions": [
+          "ASM-3"
+        ],
+        "predictions": [
+          "Market-data logs would show a price anomaly at ~15:23 UTC."
+        ],
+        "confidence": 0.04,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.04,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "postgres-orders",
+          "category": "resource_exhaustion",
+          "trigger": null
+        },
+        "mechanism": "Database contention leads to transaction aborts that surface as arithmetic errors in the pricing code.",
+        "supporting": [
+          "OBS-1"
+        ],
+        "contradicting": [
+          "OBS-5",
+          "OBS-6"
+        ],
+        "assumptions": [
+          "ASM-4"
+        ],
+        "predictions": [
+          "DB pool usage or latency would spike."
+        ],
+        "confidence": 0.02,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.02,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "redis-cache",
+          "category": "infrastructure_failure",
+          "trigger": null
+        },
+        "mechanism": "Corrupted cache entries feed stale price data to the new pricing path, triggering the exception.",
+        "supporting": [
+          "OBS-2"
+        ],
+        "contradicting": [
+          "OBS-5",
+          "OBS-6"
+        ],
+        "assumptions": [
+          "ASM-5"
+        ],
+        "predictions": [
+          "Redis error logs would appear concurrently."
+        ],
+        "confidence": 0.02,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.02,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "orders-service error_rate rose from a baseline of 0.19% to a peak of 4.19% between 15:00‑15:55 UTC.",
+      "artifacts": [
+        "metric:orders-service/error_rate"
+      ],
+      "service": "orders-service",
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "First ERROR log matching 'ArithmeticException: Non‑terminating decimal expansion; no exact representable decimal result (at PricingPathV2.applyCollar)' appears at 15:23:00 UTC and repeats 391 times until 15:54 UTC.",
+      "artifacts": [
+        "log:e56c11822899"
+      ],
+      "service": "orders-service",
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Feature flag `new_pricing_path` for orders-service rolled out from 0% to 20% at 15:22:07 UTC.",
+      "artifacts": [
+        "chg:2534"
+      ],
+      "service": "orders-service",
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "No deploys, config changes, secret rotations or infra work for orders-service or market-data-service in the 14:00‑16:00 window.",
+      "artifacts": [
+        "chg:2534"
+      ],
+      "service": null,
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "Dependency graph shows orders-service → market-data-service (gRPC, hard, 500 ms) and orders-service → postgres-orders (SQL, hard). Both downstream services exhibit baseline latency and resource usage.",
+      "artifacts": [
+        "dep:orders-service->market-data-service",
+        "dep:orders-service->postgres-orders"
+      ],
+      "service": "orders-service",
+      "id": "OBS-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "orders-service latency_p99_ms and cpu_util remain close to baseline during the incident.",
+      "artifacts": [
+        "metric:orders-service/latency_p99_ms",
+        "metric:orders-service/cpu_util"
+      ],
+      "service": "orders-service",
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "The failing log line references `PricingPathV2.applyCollar`, a code path only exercised when the `new_pricing_path` flag is on.",
+      "artifacts": [
+        "log:e56c11822899"
+      ],
+      "service": "orders-service",
+      "id": "OBS-7",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The feature flag `new_pricing_path` controls entry into `PricingPathV2.applyCollar`.",
+      "reason": "Flag name and rollout timing align with first error occurrence.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "The ArithmeticException propagates uncaught and results in a 5xx response to the client.",
+      "reason": "Observed 5xx error rate increase matches error log volume.",
+      "id": "ASM-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Market-data-service did not emit anomalous price values at 15:23 UTC.",
+      "reason": "No changes or error signals observed for market-data-service in the window.",
+      "id": "ASM-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "A database issue would manifest as SQL errors, not a Java ArithmeticException.",
+      "reason": "Exception type points to application‑level arithmetic, not DB layer.",
+      "id": "ASM-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "Redis is a soft dependency for orders-service and its failure would affect many code paths, not only the new pricing flag.",
+      "reason": "Redis criticality is soft; no redis‑related errors appear in logs.",
+      "id": "ASM-5",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_logs",
+      "scope": "market-data-service logs 15:20‑15:30 UTC",
+      "reason": "Not queried; needed to confirm or rule out a price anomaly.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "orders-service detailed trace for a failing order (request payload, price values)",
+      "reason": "Source code and request payloads unavailable; would identify the exact values causing the non‑terminating decimal.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "any config or secret changes for pricing library shared across services",
+      "reason": "Change history only covered orders-service and market-data-service; a shared library change could be missed.",
+      "id": "GAP-3",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Rollback feature flag `new_pricing_path` to 0% for orders-service.",
+      "rationale": "Immediately stops the faulty code path; error-rate should return to baseline.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Add safe division/rounding in `PricingPathV2.applyCollar` (e.g., BigDecimal with MathContext) and write unit tests for problematic price/size combos.",
+      "rationale": "Eliminates the ArithmeticException so the new pricing path can be re‑enabled safely.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Canary the fixed version behind the same flag, monitor error_rate and latency for 30 minutes before full rollout.",
+      "rationale": "Validates the fix in production with limited exposure.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Extend integration tests to cover price values that produce non‑terminating decimals; add alerting on orders-service error_rate spikes >1%.",
+      "rationale": "Early detection of similar bugs in future releases.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Which exact price/size combinations cause the non‑terminating decimal in `applyCollar`?",
+    "Did any market-data price feed momentarily emit such a value, or is the bug purely internal to the pricing calculation?",
+    "Are there other callers of `PricingPathV2` (e.g., portfolio-service) that might be affected once the flag is widened?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 7,
+    "tool_calls": 5,
+    "tokens": 41616,
+    "elapsed_s": 140.63
+  }
+}

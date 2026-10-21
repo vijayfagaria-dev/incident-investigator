@@ -1,0 +1,313 @@
+{
+  "incident_id": "T04",
+  "title": "Some order placements failing",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "At 15:22 UTC a feature‑flag rollout (new_pricing_path 0%→20%) enabled a new pricing code path in orders‑service. Within a minute the new code (PricingPathV2.applyCollar) began throwing ArithmeticException: Non‑terminating decimal expansion for the flagged accounts, producing a sustained ~10× rise in 5xx errors (≈2% of all requests) while all downstream services remained healthy. The failure is deterministic for the rolled‑out subset, explaining why retries do not help those customers.",
+  "root_cause": {
+    "service": "orders-service",
+    "category": "code_regression",
+    "trigger": "chg:2534"
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "code_regression",
+          "trigger": "chg:2534"
+        },
+        "mechanism": "Feature‑flag rollout enables new pricing implementation (PricingPathV2.applyCollar) which performs a division that can produce a non‑terminating decimal, throwing ArithmeticException for affected accounts and returning 5xx.",
+        "supporting": [
+          "OBS-1",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-9"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2",
+          "ASM-3"
+        ],
+        "predictions": [
+          "Disabling the flag returns error‑rate to baseline.",
+          "Re‑enabling after fix eliminates the exception."
+        ],
+        "confidence": 0.96,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.96,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "Market‑data returns bad or delayed prices causing order validation to fail.",
+        "supporting": [
+          "OBS-6"
+        ],
+        "contradicting": [
+          "OBS-1",
+          "OBS-6",
+          "OBS-9"
+        ],
+        "assumptions": [],
+        "predictions": [
+          "Market‑data error‑rate would rise.",
+          "Orders‑service latency to market‑data would increase."
+        ],
+        "confidence": 0.07,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.07,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "auth-service",
+          "category": "config_change",
+          "trigger": "chg:2536"
+        },
+        "mechanism": "Reduced token refresh grace period causes auth failures for a subset of users, leading to order rejection.",
+        "supporting": [
+          "OBS-8"
+        ],
+        "contradicting": [
+          "OBS-1",
+          "OBS-7",
+          "OBS-9"
+        ],
+        "assumptions": [],
+        "predictions": [
+          "Auth‑service error‑rate would spike.",
+          "Orders‑service would see auth‑related error codes."
+        ],
+        "confidence": 0.04,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.04,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "postgres-orders",
+          "category": "resource_exhaustion",
+          "trigger": null
+        },
+        "mechanism": "Database connection‑pool exhaustion or query slowdown causes order persistence failures.",
+        "supporting": [],
+        "contradicting": [
+          "OBS-7"
+        ],
+        "assumptions": [],
+        "predictions": [
+          "Active connections would approach max, CPU would rise."
+        ],
+        "confidence": 0.02,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.02,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "Orders‑service error‑rate jumped from baseline 0.20% to a window mean 1.31% (last minute 2.36%) – ≈10× increase.",
+      "artifacts": [
+        "metric:orders-service/error_rate"
+      ],
+      "service": "orders-service",
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "At 15:22:07 UTC a feature‑flag change rolled new_pricing_path from 0% → 20% on orders‑service.",
+      "artifacts": [
+        "chg:2534"
+      ],
+      "service": "orders-service",
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "First ArithmeticException in orders‑service logs appears at 15:23:00.7 UTC – “Non‑terminating decimal expansion; no exact representable decimal result (at PricingPathV2.applyCollar)”. 272 occurrences until 15:44:58.",
+      "artifacts": [
+        "log:e56c11822899"
+      ],
+      "service": "orders-service",
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "Exception stack points to PricingPathV2.applyCollar, a code path only exercised when new_pricing_path flag is enabled.",
+      "artifacts": [
+        "log:e56c11822899"
+      ],
+      "service": "orders-service",
+      "id": "OBS-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "Market‑data‑service showed only a few vendor‑rate‑limit warnings (429) and its error‑rate stayed at baseline.",
+      "artifacts": [
+        "metric:market-data-service/error_rate",
+        "log:09bb3f8bfbff"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "Postgres‑orders, redis‑cache, auth‑service metrics all remained at baseline; no saturation or error spikes.",
+      "artifacts": [
+        "metric:postgres-orders/active_connections",
+        "metric:postgres-orders/cpu_util",
+        "metric:postgres-orders/query_latency_p99_ms",
+        "metric:redis-cache/hit_ratio",
+        "metric:redis-cache/mem_util",
+        "metric:auth-service/error_rate",
+        "metric:auth-service/latency_p99_ms"
+      ],
+      "service": null,
+      "id": "OBS-7",
+      "source": "investigate"
+    },
+    {
+      "statement": "Auth‑service config change (token refresh grace 120→90s) occurred at 15:05:40 UTC – well before error surge.",
+      "artifacts": [
+        "chg:2536"
+      ],
+      "service": "auth-service",
+      "id": "OBS-8",
+      "source": "investigate"
+    },
+    {
+      "statement": "Dependency graph shows orders‑service calls market‑data‑service (hard, gRPC, 500 ms) and postgres‑orders (hard); both downstream services were healthy.",
+      "artifacts": [
+        "dep:orders-service->market-data-service",
+        "dep:orders-service->postgres-orders"
+      ],
+      "service": "orders-service",
+      "id": "OBS-9",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The feature flag new_pricing_path enables the PricingPathV2 code path for the rolled‑out accounts (≈20% of traffic).",
+      "reason": "Standard flag semantics; rollout percentage matches affected customer share.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "The ArithmeticException is fatal for the request and surfaces as a 5xx to the caller (edge‑gateway → client).",
+      "reason": "Orders‑service logs show the exception at request handling level; no retry logic observed.",
+      "id": "ASM-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "“Some customers cannot place orders; retrying does not help those customers” maps to deterministic failure for the flagged accounts.",
+      "reason": "Consistent failure for same subset aligns with flag‑based rollout.",
+      "id": "ASM-3",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_logs",
+      "scope": "Edge‑gateway / client‑side logs showing 5xx mapping to the ArithmeticException",
+      "reason": "Not queried; would close loop to user‑visible error.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Exact rollout percentage vs observed failure rate to confirm 20% ≈ “some customers”",
+      "reason": "Only flag rollout percentage known; actual affected traffic not measured.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "source_code",
+      "scope": "Source diff for PricingPathV2.applyCollar to see the exact arithmetic operation",
+      "reason": "Source code not available via provided tools.",
+      "id": "GAP-3",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Roll back / disable new_pricing_path flag (set rollout → 0%).",
+      "rationale": "Stops the faulty code path instantly; eliminates the 5xx surge.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Deploy hot‑fix to guard decimal arithmetic in PricingPathV2.applyCollar (e.g., use BigDecimal with MathContext) and add unit test for collar calculation.",
+      "rationale": "Prevents recurrence when the flag is re‑enabled.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Verify error‑rate returns to baseline (<0.3%) and order placement succeeds for all accounts.",
+      "rationale": "Confirms mitigation effectiveness.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add automated canary analysis for feature‑flag rollouts, improve numeric‑precision testing, and document flag‑rollout procedure.",
+      "rationale": "Systemic prevention of similar regressions.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "What exact input values (price, collar ratio) trigger the non‑terminating decimal?",
+    "Why was the flag jumped directly to 20% instead of a gradual rollout?",
+    "Do any downstream services (portfolio‑service, notification‑service) observe side‑effects from the failed orders?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 7,
+    "tool_calls": 9,
+    "tokens": 55325,
+    "elapsed_s": 200.02
+  }
+}

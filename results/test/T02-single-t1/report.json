@@ -1,0 +1,342 @@
+{
+  "incident_id": "T02",
+  "title": "Portfolio pages slow and failing",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "Starting at ~14:42 UTC the external quotes‑vendor began returning high latency (p99 ≈ 3 s) and elevated error rates. market‑data‑service propagated this degradation (p99 ≈ 2.4 s, error‑rate ≈ 4.5 %). portfolio‑service gRPC calls to market‑data‑service (500 ms deadline) began timing out in large numbers (679 DEADLINE_EXCEEDED errors), driving portfolio‑service p99 latency >3 s and 5xx error‑rate ~7 %. The portfolio‑service v5.4.0 deploy at 14:48 UTC arrived after the onset and only added sector‑mapping warnings; it is not the root cause but may have added modest extra load. Edge‑gateway remains healthy.",
+  "root_cause": {
+    "service": "market-data-service",
+    "category": "dependency_degradation",
+    "trigger": "metric:market-data-service/vendor_latency_p99_ms"
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "dependency_degradation",
+          "trigger": "metric:market-data-service/vendor_latency_p99_ms"
+        },
+        "mechanism": "External quotes‑vendor latency/error increase causes market‑data‑service to exceed its 500 ms gRPC deadline, leading to portfolio‑service timeouts and 5xx errors.",
+        "supporting": [
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-9"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-1"
+        ],
+        "predictions": [],
+        "confidence": 0.86,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.86,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "portfolio-service",
+          "category": "code_regression",
+          "trigger": "chg:2512"
+        },
+        "mechanism": "v5.4.0 introduces extra/heavier calls to market‑data‑service (sector breakdown), increasing load and causing gRPC deadline exceedances.",
+        "supporting": [
+          "OBS-1",
+          "OBS-6",
+          "OBS-7"
+        ],
+        "contradicting": [
+          "OBS-2",
+          "OBS-3",
+          "OBS-4"
+        ],
+        "assumptions": [
+          "ASM-2"
+        ],
+        "predictions": [],
+        "confidence": 0.18,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.18,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "resource_exhaustion",
+          "trigger": null
+        },
+        "mechanism": "Hidden saturation (e.g., gRPC thread pool, DB connection pool) in market‑data‑service causes latency rise despite flat CPU/memory.",
+        "supporting": [
+          "OBS-3"
+        ],
+        "contradicting": [
+          "OBS-9"
+        ],
+        "assumptions": [
+          "ASM-3"
+        ],
+        "predictions": [],
+        "confidence": 0.07,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.07,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "config_change",
+          "trigger": null
+        },
+        "mechanism": "An untracked configuration change or feature flag in market‑data‑service altered its vendor‑call behaviour, producing the observed spike.",
+        "supporting": [],
+        "contradicting": [
+          "OBS-8"
+        ],
+        "assumptions": [
+          "ASM-4"
+        ],
+        "predictions": [],
+        "confidence": 0.04,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.04,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "portfolio‑service p99 latency rose from a baseline of ~415 ms to a peak of 3513 ms and error‑rate rose from 0.22 % to 7.4 % between 14:42 UTC and 15:05 UTC.",
+      "artifacts": [
+        "metric:portfolio-service/latency_p99_ms",
+        "metric:portfolio-service/error_rate"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "First gRPC DEADLINE_EXCEEDED from portfolio‑service to market‑data‑service observed at 14:42:01 UTC; 679 occurrences total.",
+      "artifacts": [
+        "log:3096c4afe74b"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "market‑data‑service p99 latency rose from baseline ~253 ms to 2399 ms and error‑rate from 0.19 % to 4.6 % in the same window.",
+      "artifacts": [
+        "metric:market-data-service/latency_p99_ms",
+        "metric:market-data-service/error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "market‑data‑service vendor_error_rate peaked at 11.8 % (baseline 0.1 %) and vendor_latency_p99_ms peaked at 2933 ms (baseline 181 ms).",
+      "artifacts": [
+        "metric:market-data-service/vendor_error_rate",
+        "metric:market-data-service/vendor_latency_p99_ms"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "edge‑gateway latency (p99 ~350 ms) and error‑rate (~1.5 %) stayed near baseline throughout.",
+      "artifacts": [
+        "metric:edge-gateway/latency_p99_ms",
+        "metric:edge-gateway/error_rate"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "Only production change in the window: portfolio‑service v5.4.0 deployed at 14:48:30 UTC (adds sector breakdown).",
+      "artifacts": [
+        "chg:2512"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "'Sector mapping missing' warnings in portfolio‑service start at 14:49 UTC, after the deploy.",
+      "artifacts": [
+        "log:e481388daa5a"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-7",
+      "source": "investigate"
+    },
+    {
+      "statement": "No config, feature‑flag, secret‑rotation or infra changes for market‑data‑service, orders‑service, auth‑service, payments‑service or edge‑gateway in the 45‑min window.",
+      "artifacts": [
+        "chg:2512"
+      ],
+      "service": null,
+      "id": "OBS-8",
+      "source": "investigate"
+    },
+    {
+      "statement": "CPU and memory utilisation for both portfolio‑service and market‑data‑service remain flat (~50 % CPU, ~55 % mem).",
+      "artifacts": [
+        "metric:portfolio-service/cpu_util",
+        "metric:portfolio-service/mem_util",
+        "metric:market-data-service/cpu_util",
+        "metric:market-data-service/mem_util"
+      ],
+      "service": null,
+      "id": "OBS-9",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The quotes‑vendor latency/error spike is external and not caused by our services.",
+      "reason": "Vendor metrics show the spike; no internal change precedes it.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "Portfolio‑service v5.4.0 only adds UI‑side sector breakdown and does not alter the gRPC call path before 14:48 UTC.",
+      "reason": "Deploy timestamp is after first errors; code diff shows only UI addition.",
+      "id": "ASM-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Market‑data‑service has no hidden bottleneck (e.g., connection pool) that would appear without CPU/memory rise.",
+      "reason": "Observed metrics show flat resource usage.",
+      "id": "ASM-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "Change‑history tool captures all production changes; none missing for market‑data‑service.",
+      "reason": "Tool returned only the portfolio‑service deploy.",
+      "id": "ASM-4",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_logs",
+      "scope": "market-data-service ERROR/WARN logs 14:30‑15:05 UTC",
+      "reason": "Need server‑side gRPC latency and any thread‑pool exhaustion traces to confirm H1/H3.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "quotes‑vendor SLA / latency dashboard",
+      "reason": "Direct vendor evidence of the external spike (H1).",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "portfolio-service request traces (if available)",
+      "reason": "Determine whether v5.4.0 adds extra market‑data calls after 14:48 (H2).",
+      "id": "GAP-3",
+      "source": "investigate"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Infrastructure/network changes affecting market‑data‑service → vendor path",
+      "reason": "Rule out hidden infra change (H4).",
+      "id": "GAP-4",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Roll back portfolio‑service to v5.3.2 (or pause v5.4.0 rollout).",
+      "rationale": "Removes any possible aggravation from the new deploy; low risk and immediate.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Add a circuit‑breaker / increase gRPC timeout (e.g., 1 s) on portfolio‑service → market‑data‑service with cached‑quote fallback.",
+      "rationale": "Prevents cascade while vendor stabilises; directly addresses H1 timeout path.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Open a support ticket with the quotes‑vendor and request their status page / incident details for 14:40‑15:05 UTC.",
+      "rationale": "Confirms external vendor degradation (H1) and may provide ETA for resolution.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Pull market‑data‑service ERROR/WARN logs for 14:30‑15:05 UTC to verify server‑side gRPC latency and any pool exhaustion.",
+      "rationale": "Closes gap G1 and discriminates between H1 and H3.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add alerting on market‑data‑service vendor_latency_p99_ms and vendor_error_rate with low thresholds.",
+      "rationale": "Early detection of future vendor issues before they cascade.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Review portfolio‑service v5.4.0 code for any new market‑data calls; guard them with the same circuit‑breaker if re‑enabled.",
+      "rationale": "Ensures the sector‑breakdown feature cannot re‑introduce load spikes.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Did the quotes‑vendor experience a known outage or deployment at ~14:40 UTC?",
+    "Does market‑data‑service have any hidden saturation (connection pool, gRPC thread pool) not visible in CPU/memory metrics?",
+    "Does the new sector‑breakdown feature in v5.4.0 issue additional GetQuotes calls per request?",
+    "Were there any network‑path changes (firewall rule, DNS) that could have increased latency to the vendor?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 8,
+    "tool_calls": 6,
+    "tokens": 53272,
+    "elapsed_s": 230.35
+  }
+}

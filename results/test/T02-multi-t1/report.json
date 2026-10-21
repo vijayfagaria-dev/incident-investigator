@@ -1,0 +1,744 @@
+{
+  "incident_id": "T02",
+  "title": "Portfolio pages slow and failing",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "Portfolio and positions pages became slow and error‑prone beginning ~14:41 UTC when the external quotes‑vendor latency rose sharply, causing market‑data‑service HTTPS calls (800 ms timeout) to time out and its circuit breaker to go half‑open. Downstream callers – portfolio‑service (gRPC 500 ms timeout) and orders‑service – received DEADLINE_EXCEEDED errors, which manifested as >2 s p99 latency, 5xx errors, and order rejections. The portfolio‑service v5.4.0 deploy occurred at 14:48 UTC, after the degradation had already started, and was ruled out as the primary cause. Confidence in the vendor‑latency hypothesis (HYP‑1) is moderate (≈0.62). The exact reason for the vendor slowdown (throttling, internal outage, network path) remains unknown.",
+  "root_cause": {
+    "service": "market-data-service",
+    "category": "dependency_degradation",
+    "trigger": null
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "An increase in latency or throttling at the external quotes‑vendor caused market‑data‑service HTTPS calls (800 ms timeout) to time out. The service’s circuit breaker went half‑open, so downstream callers (portfolio‑service via gRPC 500 ms timeout and orders‑service) received DEADLINE_EXCEEDED errors. This cascaded into elevated portfolio‑service latency and 5xx errors, and order rejections at orders‑service.",
+        "supporting": [
+          "OBS-19",
+          "OBS-20",
+          "OBS-25",
+          "OBS-18",
+          "OBS-11",
+          "OBS-12",
+          "OBS-22",
+          "OBS-23",
+          "OBS-24",
+          "OBS-28",
+          "OBS-29",
+          "OBS-30",
+          "OBS-31",
+          "OBS-33",
+          "OBS-34",
+          "OBS-35",
+          "OBS-36",
+          "OBS-37"
+        ],
+        "contradicting": [
+          "OBS-9"
+        ],
+        "assumptions": [
+          "ASM-6",
+          "ASM-7"
+        ],
+        "predictions": [
+          "Minute‑resolution market‑data‑service latency_p99_ms and error_rate will show a rise beginning ~14:40 UTC.",
+          "Quotes‑vendor side metrics (if available) would show increased latency or throttling at the same time.",
+          "Rolling back portfolio‑service v5.4.0 will not immediately restore latency/error rates."
+        ],
+        "confidence": 0.62,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.62,
+      "calibration": [],
+      "confidence_band": "medium",
+      "verdict": "accept",
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "portfolio-service",
+          "category": "code_regression",
+          "trigger": "chg:2512"
+        },
+        "mechanism": "The v5.4.0 deploy added a sector‑breakdown feature that introduced a slower code path (e.g., extra DB query or cache miss) which increased the time spent in the market‑data‑service gRPC call and/or postgres‑orders, pushing p99 latency above the gateway timeout and raising error rates.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-10",
+          "OBS-21",
+          "OBS-16",
+          "OBS-17",
+          "OBS-22",
+          "OBS-23"
+        ],
+        "contradicting": [
+          "OBS-24"
+        ],
+        "assumptions": [
+          "ASM-3"
+        ],
+        "predictions": [
+          "Internal latency breakdown for portfolio‑service would show a new component (e.g., DB or cache) spiking after 14:48 UTC",
+          "Rolling back v5.4.0 would immediately reduce latency and error rate"
+        ],
+        "confidence": 0.22,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.22,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "temporal_violation",
+          "severity": "blocking",
+          "detail": "Portfolio‑service v5.4.0 deployed at 14:48 UTC, after latency/error spikes began at 14:41‑14:45 UTC (OBS‑24).",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-5",
+        "root_cause": {
+          "service": "infrastructure",
+          "category": "infrastructure_failure",
+          "trigger": null
+        },
+        "mechanism": "A transient network or routing issue between market‑data‑service and the quotes‑vendor increased round‑trip latency beyond the 800 ms timeout, causing the same cascade of DEADLINE_EXCEEDED errors to portfolio‑service and orders‑service.",
+        "supporting": [
+          "OBS-19",
+          "OBS-20",
+          "OBS-25",
+          "OBS-18",
+          "OBS-11",
+          "OBS-12",
+          "OBS-22",
+          "OBS-23",
+          "OBS-28",
+          "OBS-29",
+          "OBS-30",
+          "OBS-31",
+          "OBS-33",
+          "OBS-34",
+          "OBS-35",
+          "OBS-36",
+          "OBS-37"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-8"
+        ],
+        "predictions": [
+          "Network‑level metrics (e.g., packet loss, RTT) between market‑data‑service and quotes‑vendor would show a spike at ~14:40 UTC.",
+          "Restarting market‑data‑service instances would not resolve the issue until the network path recovers.",
+          "Portfolio‑service internal latency breakdown would show the gRPC client latency dominating the >2 s p99."
+        ],
+        "confidence": 0.18,
+        "version": 1,
+        "round": 2
+      },
+      "confidence": 0.18,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-5",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "HYP‑1 (quotes‑vendor latency/throttling) explains all observed symptoms with direct log and metric evidence; a generic network failure has not been ruled out but lacks supporting data.",
+          "alternative": "HYP-1",
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "resource_exhaustion",
+          "trigger": null
+        },
+        "mechanism": "A sudden burst of requests (perhaps from portfolio‑service) exhausted market‑data‑service thread‑pool or connection‑pool, causing its outbound HTTPS calls to quotes‑vendor to timeout and the circuit breaker to half‑open.",
+        "supporting": [
+          "OBS-19",
+          "OBS-20",
+          "OBS-18",
+          "OBS-25"
+        ],
+        "contradicting": [
+          "OBS-9",
+          "OBS-13",
+          "OBS-14"
+        ],
+        "assumptions": [
+          "ASM-4"
+        ],
+        "predictions": [
+          "market-data-service CPU, thread‑pool, or connection‑pool metrics would show saturation starting ~14:40 UTC",
+          "portfolio‑service request rate would show a corresponding spike before 14:41 UTC"
+        ],
+        "confidence": 0.07,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.07,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Market‑data‑service logs show quotes‑vendor request timeouts and circuit‑breaker half‑open (OBS‑19, OBS‑20, OBS‑25, OBS‑26), indicating an external dependency problem rather than internal resource exhaustion.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 5,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "config_change",
+          "trigger": null
+        },
+        "mechanism": "A silent configuration change (e.g., lowered circuit‑breaker timeout or stricter validation flag) made orders‑service reject orders when market‑data‑service latency rose, producing the observed error‑rate increase without affecting its own latency.",
+        "supporting": [
+          "OBS-11",
+          "OBS-12"
+        ],
+        "contradicting": [
+          "OBS-13",
+          "OBS-9"
+        ],
+        "assumptions": [
+          "ASM-5"
+        ],
+        "predictions": [
+          "orders‑service config audit would reveal a timeout/flag change just before 14:42 UTC",
+          "Reverting that config would stop order rejections even if market‑data‑service remains slow"
+        ],
+        "confidence": 0.07,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.07,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-4",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "No deploy, config change, feature‑flag toggle, or secret rotation recorded for orders‑service in the relevant window (OBS‑9).",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "deploy on portfolio-service at 14:48:30 UTC by ci/deploy-bot: portfolio-service v5.4.0: add sector breakdown to performance page (version: 5.4.0, previous_version: 5.3.2, commit: 3c7d0aa, diff: +410 / -88)",
+      "artifacts": [
+        "chg:2512"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-1",
+      "source": "change-census"
+    },
+    {
+      "statement": "portfolio-service v5.4.0 was deployed at 2026-10-06T14:48:30Z (chg:2512).",
+      "artifacts": [
+        "chg:2512"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-2",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "No other deploy, config, feature‑flag, secret rotation, or infra changes were returned for market-data-service, orders-service, edge-gateway, postgres-orders, redis-cache, or quotes-vendor in the 14:20‑15:05 window.",
+      "artifacts": [
+        "chg:2512"
+      ],
+      "service": null,
+      "id": "OBS-9",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "The deploy occurred ~17 minutes before the incident was reported at 15:05, placing it inside a plausible causation window.",
+      "artifacts": [
+        "chg:2512"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-10",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "WARN log pattern “price check for order <order> failed: market-data-service DEADLINE_EXCEEDED; rejecting” appears first at 14:42:01 UTC and persists until 15:04:53 UTC (178 occurrences).",
+      "artifacts": [
+        "log:6f37ccdbcbc1"
+      ],
+      "service": "orders-service",
+      "id": "OBS-11",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "Error rate metric rises from a baseline mean of 0.0019 to a window mean of 0.0108 (peak 0.0265), a ~5× increase.",
+      "artifacts": [
+        "metric:orders-service/error_rate"
+      ],
+      "service": "orders-service",
+      "id": "OBS-12",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "p99 latency stays near baseline (baseline 266 ms, window mean 259 ms, max 332 ms) – no major latency regression locally.",
+      "artifacts": [
+        "metric:orders-service/latency_p99_ms"
+      ],
+      "service": "orders-service",
+      "id": "OBS-13",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "CPU, memory, DB pool usage, RPS and DB queries per request all remain within baseline ranges.",
+      "artifacts": [
+        "metric:orders-service/cpu_util",
+        "metric:orders-service/mem_util",
+        "metric:orders-service/db_pool_in_use",
+        "metric:orders-service/rps",
+        "metric:orders-service/db_queries_per_request"
+      ],
+      "service": "orders-service",
+      "id": "OBS-14",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "portfolio‑service error_rate rose from a baseline mean of 0.0022 to a peak of 0.074 (mean 0.030) during the window.",
+      "artifacts": [
+        "metric:portfolio-service/error_rate"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-16",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "portfolio‑service p99 latency jumped from a baseline of ~415 ms to a maximum of 3.5 s (mean 1.6 s, last 3.1 s).",
+      "artifacts": [
+        "metric:portfolio-service/latency_p99_ms"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-17",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "First portfolio‑service gRPC DEADLINE_EXCEEDED to market‑data‑service logged at 14:42:01 UTC; 679 occurrences through 15:04:59 UTC.",
+      "artifacts": [
+        "log:3096c4afe74b"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-18",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "market‑data‑service began logging quotes‑vendor request timeouts (800 ms) at 14:41:01 UTC; 1,072 occurrences through 15:04:59 UTC.",
+      "artifacts": [
+        "log:785c94c54006"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-19",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "market‑data‑service circuit to quotes‑vendor went half‑open at 14:47:02 UTC and stayed half‑open through 15:04:50 UTC (78 events).",
+      "artifacts": [
+        "log:a9fa5c6b6926"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-20",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "portfolio‑service deploy v5.4.0 recorded at 14:48:30 UTC (after the latency/error onset).",
+      "artifacts": [
+        "chg:2512"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-21",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "At 14:45 UTC portfolio‑service p99 latency was 2,906 ms (baseline ~497 ms) and remained >2 s for the entire 14:45‑15:09 window, peaking at 3,513 ms at 14:53 UTC.",
+      "artifacts": [
+        "metric:portfolio-service/latency_p99_ms"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-22",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "At 14:45 UTC portfolio‑service error‑rate was 0.0683 (baseline ~0.0038) and stayed elevated (0.046‑0.074) through 15:09 UTC.",
+      "artifacts": [
+        "metric:portfolio-service/error_rate"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-23",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "The v5.4.0 deploy of portfolio‑service occurred at 14:48:30 UTC, after both latency and error‑rate were already spiked (first metric points at 14:45‑14:47 show the elevation).",
+      "artifacts": [
+        "chg:2512",
+        "metric:portfolio-service/latency_p99_ms",
+        "metric:portfolio-service/error_rate"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-24",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "Portfolio‑service began logging gRPC DEADLINE_EXCEEDED errors to market‑data‑service at 14:42:01 UTC (679 occurrences through 15:04:59 UTC).",
+      "artifacts": [
+        "log:3096c4afe74b"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-25",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "Baseline (14:35‑14:39) latency_p99 ≈ 253 ms and error_rate ≈ 0.002 (baseline_mean).",
+      "artifacts": [
+        "metric:market-data-service/latency_p99_ms",
+        "metric:market-data-service/error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-28",
+      "source": "r2-observability-5"
+    },
+    {
+      "statement": "First latency jump at 14:41 UTC: p99 rose from 272 ms (14:39) to 1,064 ms (≈4× baseline).",
+      "artifacts": [
+        "metric:market-data-service/latency_p99_ms"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-29",
+      "source": "r2-observability-5"
+    },
+    {
+      "statement": "First error‑rate rise at 14:41 UTC: error_rate increased to 0.0073 (≈3.7× baseline).",
+      "artifacts": [
+        "metric:market-data-service/error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-30",
+      "source": "r2-observability-5"
+    },
+    {
+      "statement": "Sustained degradation: latency stayed >1.6 s (peak 2,399 ms at 14:47) and error_rate climbed to 0.0456 (≈23× baseline) at 14:55, remaining >0.02 through 15:09.",
+      "artifacts": [
+        "metric:market-data-service/latency_p99_ms",
+        "metric:market-data-service/error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-31",
+      "source": "r2-observability-5"
+    },
+    {
+      "statement": "Baseline (14:30‑14:38) latency_p99 ≈ 250 ms and error_rate ≈ 0.002.",
+      "artifacts": [
+        "metric:market-data-service/latency_p99_ms",
+        "metric:market-data-service/error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-33",
+      "source": "r2-observability-7"
+    },
+    {
+      "statement": "First latency increase at 14:40 UTC: p99 rose to 463 ms (≈2× baseline) while error_rate remained near baseline.",
+      "artifacts": [
+        "metric:market-data-service/latency_p99_ms",
+        "metric:market-data-service/error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-34",
+      "source": "r2-observability-7"
+    },
+    {
+      "statement": "Sharp degradation onset at 14:42 UTC: latency_p99 spiked to 1,644 ms (≈6× baseline) and error_rate rose to 0.019 (≈10× baseline).",
+      "artifacts": [
+        "metric:market-data-service/latency_p99_ms",
+        "metric:market-data-service/error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-35",
+      "source": "r2-observability-7"
+    },
+    {
+      "statement": "Sustained high latency: p99 stayed >1.6 s for the remainder of the window, peaking at 2,148 ms at 14:46 UTC.",
+      "artifacts": [
+        "metric:market-data-service/latency_p99_ms"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-36",
+      "source": "r2-observability-7"
+    },
+    {
+      "statement": "Error_rate peaked at 0.0456 (≈23× baseline) at 14:54 UTC and remained above 0.02 through 15:09 UTC.",
+      "artifacts": [
+        "metric:market-data-service/error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-37",
+      "source": "r2-observability-7"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The v5.4.0 diff may contain hidden changes (new DB query, cache key, extra gRPC call) that could worsen an existing problem.",
+      "reason": "Only a high‑level description is known; full diff not retrieved (GAP‑2, GAP‑12).",
+      "id": "ASM-3",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "A sudden burst of requests from portfolio‑service could have saturated market‑data‑service resources.",
+      "reason": "No metrics show portfolio‑service request rate before 14:41, but the timing aligns with the first timeout (OBS‑18, OBS‑19).",
+      "id": "ASM-4",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "A silent config toggle or feature‑flag change on orders‑service altered its rejection threshold just before 14:42 UTC.",
+      "reason": "Orders‑service change history not provided (GAP‑6); error pattern suggests reactive rejection.",
+      "id": "ASM-5",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The quotes‑vendor experienced increased latency or rate‑limiting around 14:40 UTC.",
+      "reason": "Market‑data‑service logs show timeouts and a half‑open circuit breaker starting at 14:41 UTC with no local code change.",
+      "id": "ASM-6",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "Portfolio‑service latency spike is fully explained by downstream market‑data‑service timeouts, not by the v5.4.0 code change.",
+      "reason": "Latency and error rates in portfolio‑service were already elevated at 14:45 UTC, three minutes before the deploy at 14:48:30 UTC (OBS-24).",
+      "id": "ASM-7",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "A transient network degradation occurred on the path from market‑data‑service to quotes‑vendor.",
+      "reason": "No deploy or config change on market‑data‑service or quotes‑vendor was observed (OBS-9), yet upstream latency rose sharply.",
+      "id": "ASM-8",
+      "source": "r2-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "get_change_history",
+      "scope": "All seven services (portfolio-service, market-data-service, orders-service, edge-gateway, postgres-orders, redis-cache, quotes-vendor) for 14:20‑15:05",
+      "reason": "Only one change (portfolio-service deploy) was returned; infra‑level changes (e.g., network config, capacity scaling, DNS) or feature‑flag toggles may not be captured in this source.",
+      "id": "GAP-1",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Detailed diff of portfolio-service v5.4.0 (commit 3c7d0aa)",
+      "reason": "The change summary mentions “add sector breakdown to performance page” but the exact code paths touched (e.g., new DB queries, cache keys, external calls) are unknown.",
+      "id": "GAP-2",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_service_dependencies",
+      "scope": "Full transitive dependency graph beyond depth 2",
+      "reason": "Only depth 2 was queried; deeper downstream services (e.g., orders-service) could be indirectly affected but were not examined.",
+      "id": "GAP-3",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "orders-service Kafka consumer lag / consumer group lag",
+      "reason": "Metric not exposed in the current metrics catalogue; cannot verify if Kafka lag contributed.",
+      "id": "GAP-4",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "market-data-service logs at WARN/ERROR",
+      "reason": "Needed to confirm the downstream timeout source but not part of assigned services.",
+      "id": "GAP-5",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_changes",
+      "scope": "orders-service deployment / config change history",
+      "reason": "Change census for orders-service not provided; cannot rule out a local config regression.",
+      "id": "GAP-6",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "edge-gateway, postgres-orders, orders-service (WARN+ patterns)",
+      "reason": "Tool step limit reached; logs for these services were not fetched.",
+      "id": "GAP-7",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "edge-gateway, postgres-orders, orders-service (full metric summary)",
+      "reason": "Tool step limit reached; metrics for these services were not fetched.",
+      "id": "GAP-8",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "market-data-service latency_p99_ms and error_rate (minute granularity)",
+      "reason": "Needed to confirm upstream degradation timeline and magnitude.",
+      "id": "GAP-9",
+      "source": "r1-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "portfolio-service internal latency components (e.g., grpc_client_latency_ms, db_latency_ms, cache_latency_ms)",
+      "reason": "Would identify which downstream call dominates the >2 s p99.",
+      "id": "GAP-10",
+      "source": "r1-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "redis-cache and postgres-orders metrics (latency, error_rate, pool usage) for 14:45‑15:10",
+      "reason": "To rule out secondary contributors such as cache‑miss spikes or DB pool exhaustion.",
+      "id": "GAP-11",
+      "source": "r1-observability-4"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "Full changelog/diff for portfolio-service v5.4.0 beyond the brief description",
+      "reason": "To assess whether the code change could have worsened an already‑present problem.",
+      "id": "GAP-12",
+      "source": "r1-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "portfolio-service internal latency components (grpc_client_latency_ms, db_latency_ms, cache_latency_ms) 14:35‑15:10 UTC",
+      "reason": "Metrics not present in the service's exported catalog; cannot retrieve per‑dependency latency breakdown.",
+      "id": "GAP-13",
+      "source": "r2-observability-6"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "market-data-service per‑minute latency_p99_ms and error_rate (14:35‑15:10)",
+      "reason": "API down‑sampled to 2‑minute steps to stay within 30 points, limiting minute‑level onset precision.",
+      "id": "GAP-14",
+      "source": "r2-observability-5"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "market-data-service WARN/ERROR patterns (14:35‑15:10)",
+      "reason": "Log patterns for market‑data‑service were not fetched in this step; they could confirm vendor timeout details.",
+      "id": "GAP-15",
+      "source": "r2-observability-5"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "minute‑resolution latency_p99_ms and error_rate for market-data-service 14:30‑15:10 UTC",
+      "reason": "The metrics API limited the step to 2 minutes (30‑point max), so true per‑minute granularity is unavailable.",
+      "id": "GAP-16",
+      "source": "r2-observability-7"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "WARN/ERROR log patterns for market-data-service during 14:30‑15:10 UTC",
+      "reason": "Logs were not queried in this step; timeout/error lines and circuit‑breaker state changes are not captured here.",
+      "id": "GAP-17",
+      "source": "r2-observability-7"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Increase the market‑data‑service → quotes‑vendor timeout and/or add a short‑circuit fallback (e.g., cached quote) to prevent cascading DEADLINE_EXCEEDED errors.",
+      "rationale": "Current 800 ms timeout is too tight for observed vendor latency spikes; a higher timeout or cached fallback buys time for upstream services.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Raise portfolio‑service gRPC timeout to market‑data‑service (currently 500 ms) and implement retry/back‑off with circuit‑breaker awareness.",
+      "rationale": "Portfolio‑service is the first downstream consumer; a modest timeout increase reduces 5xx errors while the vendor issue is resolved.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Add explicit resilience patterns (timeout, retry, bulkhead, fallback) for the market‑data‑service → quotes‑vendor call and expose per‑dependency latency metrics.",
+      "rationale": "Hard‑coded 800 ms timeout and lack of observability made the cascade invisible until it impacted customers.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Create an alert on market‑data‑service latency_p99_ms and error_rate crossing 2× baseline, and on circuit‑breaker state changes.",
+      "rationale": "Early detection of vendor degradation would allow proactive mitigation before portfolio‑service SLA breach.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Obtain quotes‑vendor side metrics (latency, throttling, error rates) for the 14:30‑15:10 UTC window to confirm the root cause.",
+      "rationale": "HYP‑1 assumes vendor latency/throttling; vendor data will verify or refute this and guide vendor‑side remediation.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Collect network‑level metrics (RTT, packet loss) between market‑data‑service and the quotes‑vendor for the same window.",
+      "rationale": "HYP‑5 (generic network failure) was not excluded; network data will determine if a routing issue contributed.",
+      "hypothesis_id": "HYP-5",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Enable and collect portfolio‑service internal latency breakdown (grpc_client_latency_ms, db_latency_ms, cache_latency_ms) for future incidents.",
+      "rationale": "Current metric catalog lacks per‑dependency latency; this gap prevented confirming the exact downstream bottleneck.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "What specific condition on the quotes‑vendor side caused the latency spike (throttling, internal outage, capacity limit)?",
+    "Was there any transient network routing or congestion between market‑data‑service and the quotes‑vendor during 14:40‑15:10 UTC?",
+    "Do the portfolio‑service internal latency components show the gRPC call to market‑data‑service dominating the >2 s p99, or were DB/cache calls also elevated?",
+    "Can the quotes‑vendor provide SLA‑level metrics or incident logs for the affected period?",
+    "Are there any configuration or capacity changes in the market‑data‑service (e.g., thread‑pool size) that could have amplified the vendor latency impact?"
+  ],
+  "termination": "the critic accepted HYP-1",
+  "stats": {
+    "rounds": 2,
+    "model_calls": 39,
+    "tool_calls": 19,
+    "tokens": 198267,
+    "elapsed_s": 1120.15
+  }
+}

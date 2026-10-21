@@ -1,0 +1,339 @@
+{
+  "incident_id": "T06",
+  "title": "Intermittent errors across the app",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "At ~11:15 UTC the edge‑gateway began returning ~2 % 5xx errors caused by upstream connection timeouts to portfolio‑service. Portfolio‑service simultaneously logged gRPC UNAVAILABLE errors when calling market‑data‑service, while orders‑service logged PostgreSQL connection resets. Both downstream failures started within the same minute, yet the only production change was the orders‑service v2.16.0 deploy at 11:05. Market‑data‑service remained healthy (error rate flat). The pattern points to a brief platform‑wide connectivity problem (network or host‑level) that momentarily broke access to both the orders DB and the market‑data gRPC endpoint; retries succeeded, matching the reported intermittent errors.",
+  "root_cause": {
+    "service": "platform/network",
+    "category": "infrastructure_failure",
+    "trigger": null
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "platform/network",
+          "category": "infrastructure_failure",
+          "trigger": null
+        },
+        "mechanism": "A brief network or host‑level disruption broke connectivity from the app tier to both postgres‑orders and market‑data‑service, causing upstream timeouts at edge‑gateway and gRPC failures at portfolio‑service.",
+        "supporting": [
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-1",
+          "OBS-5",
+          "OBS-6",
+          "OBS-8"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-1"
+        ],
+        "predictions": [
+          "Network‑level metrics (packet loss, NIC errors) would show a spike at 11:15.",
+          "Postgres and market‑data hosts would log connection resets at the same minute."
+        ],
+        "confidence": 0.55,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.55,
+      "calibration": [],
+      "confidence_band": "medium",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "code_regression",
+          "trigger": "chg:2561"
+        },
+        "mechanism": "The v2.16.0 deploy introduced a connection‑pool leak / extra load on market‑data‑service, exhausting the postgres pool (F10) and causing downstream gRPC failures seen by portfolio‑service.",
+        "supporting": [
+          "OBS-7",
+          "OBS-10",
+          "OBS-11",
+          "OBS-5"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-3"
+        ],
+        "assumptions": [
+          "ASM-2"
+        ],
+        "predictions": [
+          "Orders‑service would show increasing open DB connections over time after deploy.",
+          "Market‑data‑service would show elevated inbound gRPC error rate from orders‑service."
+        ],
+        "confidence": 0.3,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.3,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "redis-cache",
+          "category": "resource_exhaustion",
+          "trigger": null
+        },
+        "mechanism": "Exhaustion of the shared redis‑cache caused both orders‑service and portfolio‑service to fall back to slower paths, leading to timeouts and connection resets.",
+        "supporting": [],
+        "contradicting": [
+          "OBS-6",
+          "OBS-8"
+        ],
+        "assumptions": [],
+        "predictions": [
+          "Redis‑cache metrics would show saturation (CPU, memory, evictions) at 11:15."
+        ],
+        "confidence": 0.1,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.1,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "quotes-vendor",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "Rate‑limit / latency from the external quotes vendor propagated through market‑data‑service to its callers, causing gRPC UNAVAILABLE.",
+        "supporting": [],
+        "contradicting": [
+          "OBS-6",
+          "OBS-3"
+        ],
+        "assumptions": [],
+        "predictions": [
+          "Market‑data‑service vendor_error_rate would spike at 11:15."
+        ],
+        "confidence": 0.05,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.05,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "Edge‑gateway error_rate rose from baseline 0.20 % to a peak 2.65 % beginning ~11:15 UTC.",
+      "artifacts": [
+        "metric:edge-gateway/error_rate"
+      ],
+      "service": null,
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "Edge‑gateway logs show “upstream connect error … connection timeout to portfolio‑service” first at 11:15:01 and continuing to 11:59.",
+      "artifacts": [
+        "log:80f1f968cbad"
+      ],
+      "service": null,
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Portfolio‑service logs show gRPC calls to market‑data‑service failing with UNAVAILABLE (connection reset) first at 11:15:13.",
+      "artifacts": [
+        "log:e0364bef1b6f"
+      ],
+      "service": null,
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "Orders‑service logs show “connection to postgres‑orders reset by peer; retrying” first at 11:15:13.",
+      "artifacts": [
+        "log:a32c4ff0bfc1"
+      ],
+      "service": null,
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "Orders‑service error_rate climbed from baseline 0.18 % to a peak 1.26 %.",
+      "artifacts": [
+        "metric:orders-service/error_rate"
+      ],
+      "service": null,
+      "id": "OBS-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "Market‑data‑service error_rate remained flat (baseline 0.20 %, last 0.03 %).",
+      "artifacts": [
+        "metric:market-data-service/error_rate"
+      ],
+      "service": null,
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "Only production change in the window: orders‑service v2.16.0 deployed at 11:05:12.",
+      "artifacts": [
+        "chg:2561"
+      ],
+      "service": null,
+      "id": "OBS-7",
+      "source": "investigate"
+    },
+    {
+      "statement": "No config, feature‑flag, secret‑rotation or infra changes recorded between 10:00‑12:00.",
+      "artifacts": [
+        "chg:2561"
+      ],
+      "service": null,
+      "id": "OBS-8",
+      "source": "investigate"
+    },
+    {
+      "statement": "Orders‑service db_pool_in_use grew from baseline 16.4 connections to ~20.1 connections.",
+      "artifacts": [
+        "metric:orders-service/db_pool_in_use"
+      ],
+      "service": null,
+      "id": "OBS-10",
+      "source": "investigate"
+    },
+    {
+      "statement": "Orders‑service logs show “fee cache cold; fetching … fee schedules” from 11:06‑11:18.",
+      "artifacts": [
+        "log:e91658633ca4"
+      ],
+      "service": null,
+      "id": "OBS-11",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The near‑simultaneous connection‑reset errors to postgres‑orders and gRPC UNAVAILABLE to market‑data‑service are symptoms of a single underlying transient network/infrastructure issue, not two independent bugs.",
+      "reason": "Both error streams start within the same minute across independent downstream services.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "Because retries succeed (support‑desk note), the failures are brief and transient rather than permanent service outages.",
+      "reason": "Customer reports indicate retry usually works.",
+      "id": "ASM-2",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_metrics",
+      "scope": "Network / host‑level metrics (packet loss, NIC errors, VPC flow logs) for the app tier around 11:15",
+      "reason": "Not available via current metrics API; needed to confirm infrastructure_failure hypothesis.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "Postgres‑orders logs / metrics (connection reset counts, max‑connections) for 11:10‑11:20",
+      "reason": "Postgres is not a listed service in the toolset; direct DB logs would show if the DB itself saw a spike.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "Redis‑cache metrics (cpu, memory, evictions, command latency) for the incident window",
+      "reason": "Redis‑cache not queried; needed to rule out resource_exhaustion hypothesis.",
+      "id": "GAP-3",
+      "source": "investigate"
+    },
+    {
+      "tool": "search_incident_history",
+      "scope": "Any prior incidents with simultaneous postgres and market‑data connectivity loss",
+      "reason": "Analogous past incidents could guide investigation but are not direct evidence.",
+      "id": "GAP-4",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "investigate",
+      "description": "Request network/platform team to pull VPC flow logs, host health metrics, and NIC error counters for 11:10‑11:20 UTC.",
+      "rationale": "Direct evidence for the infrastructure_failure hypothesis (H1).",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Enable PostgreSQL log_connections / log_disconnections for 24 h and monitor db_pool_in_use alerts.",
+      "rationale": "Closes gap on DB‑side visibility; helps confirm or reject H2.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Add alert on edge‑gateway upstream‑timeout rate >1 % for 2 min and on orders‑service db_pool_in_use >90 % of max.",
+      "rationale": "Faster detection if the blip recurs.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Review orders‑service v2.16.0 diff (commit 8b20f4e) for connection‑pool handling; run a canary load test.",
+      "rationale": "Low‑effort mitigation if the deploy contributed to pool growth.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Instrument a synthetic full‑path probe (edge‑gateway → portfolio → market‑data) recording per‑hop latency.",
+      "rationale": "Improves observability for future multi‑service incidents.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Document run‑book step: “If multiple hard dependencies show connection‑reset at the same minute, treat as possible infra/network issue and engage platform team.”",
+      "rationale": "Operational knowledge capture.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Was there an unreported infrastructure event (rolling node‑pool upgrade, security‑group change, DNS hiccup) at ~11:15?",
+    "Did the orders‑service deploy introduce a subtle connection‑pool leak that only manifested under load after ~10 min?",
+    "Why did the edge‑gateway error rate peak at 2.6 % while orders‑service error rate only reached 1.3 %?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 19,
+    "tool_calls": 19,
+    "tokens": 140974,
+    "elapsed_s": 854.12
+  }
+}

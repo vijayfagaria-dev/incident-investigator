@@ -1,0 +1,606 @@
+{
+  "incident_id": "T02",
+  "title": "Portfolio pages slow and failing",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "Portfolio and positions pages became slow and error‑prone after the external quotes vendor latency rose to ~800 ms at ~14:41 UTC. Market‑data‑service calls the vendor with an 800 ms timeout, which exceeds the hard 500 ms gRPC timeout used by portfolio‑service, causing DEADLINE_EXCEEDED errors that cascade through portfolio‑service (error_rate up to 7.4 %, p99 latency >3 s) and hit the edge‑gateway 3 s hard timeout, producing 5xx responses and order rejections. The portfolio‑service v5.4.0 deploy occurred after the first vendor timeouts, so it is not the root cause. The investigation is conclusive for this chain, but the early orders‑service 5xx at 14:36 UTC and the exact code changes behind the deploy remain unexplained.",
+  "root_cause": {
+    "service": "market-data-service",
+    "category": "dependency_degradation",
+    "trigger": null
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "External quotes‑vendor latency rose to ~800 ms (OBS‑13/15). Market‑data‑service calls the vendor with an 800 ms timeout, which exceeds the hard 500 ms gRPC timeout used by portfolio‑service (OBS‑4). Each gRPC call therefore fails with DEADLINE_EXCEEDED (OBS‑10) and propagates upstream: portfolio‑service error_rate spikes (OBS‑11) and latency_p99 climbs above the edge‑gateway 3 s hard timeout (OBS‑3, OBS‑12), producing 5xx to clients. Orders‑service also sees price‑check failures (OBS‑17). The deploy of portfolio‑service v5.4.0 occurs after the first vendor time‑outs (OBS‑14), so it cannot be the initial cause.",
+        "supporting": [
+          "OBS-10",
+          "OBS-13",
+          "OBS-15",
+          "OBS-16",
+          "OBS-17",
+          "OBS-3",
+          "OBS-4",
+          "OBS-11",
+          "OBS-12"
+        ],
+        "contradicting": [
+          "OBS-14",
+          "OBS-8"
+        ],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "Market‑data‑service outbound vendor latency metric will show a sustained >500 ms tail from ~14:41 onward.",
+          "Circuit‑breaker half‑open events will correlate with vendor latency spikes."
+        ],
+        "confidence": 0.82,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.82,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": "accept",
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "portfolio-service",
+          "category": "code_regression",
+          "trigger": "chg:2512"
+        },
+        "mechanism": "Deploy v5.4.0 adds sector‑breakdown logic (+410/‑88 lines, OBS‑1/2/9). If the new code path is exercised on the /v1/portfolio endpoint (or via a feature flag not captured), it could issue extra gRPC calls to market‑data‑service and/or heavier SQL to postgres‑orders (OBS‑5, OBS‑6). This would amplify the existing vendor latency, pushing portfolio‑service latency_p99 above the edge‑gateway 3 s timeout after 14:48, raising error_rate (OBS‑11, OBS‑12).",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-9",
+          "OBS-11",
+          "OBS-12",
+          "OBS-5",
+          "OBS-6"
+        ],
+        "contradicting": [
+          "OBS-10",
+          "OBS-13",
+          "OBS-15",
+          "OBS-14"
+        ],
+        "assumptions": [
+          "ASM-3",
+          "ASM-4"
+        ],
+        "predictions": [
+          "Per‑endpoint latency for the performance‑page endpoint will jump sharply after 14:48, while the generic /v1/portfolio endpoint may show a smaller change.",
+          "If a feature flag controls the new code, flag state will show it enabled for a subset of traffic at 14:48."
+        ],
+        "confidence": 0.38,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.38,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "temporal_violation",
+          "severity": "blocking",
+          "detail": "Portfolio‑service v5.4.0 deploy (14:48:30) occurs after the first gRPC DEADLINE_EXCEEDED (14:42) and vendor time‑outs (14:41). The cause cannot precede the effect.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "Exact code changes (diff) and any feature‑flag enablement for the new sector‑breakdown are not known (GAP‑1, GAP‑3).",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "resource_exhaustion",
+          "trigger": null
+        },
+        "mechanism": "Orders‑service emits 13 HTTP 5xx starting at 14:36 (OBS‑18) and later price‑check failures caused by market‑data‑service DEADLINE_EXCEEDED (OBS‑17). A possible thread‑pool or DB‑connection‑pool saturation could cause early 5xx, which then compounds downstream via edge‑gateway (hard 3 s dependency, OBS‑7).",
+        "supporting": [
+          "OBS-18",
+          "OBS-19",
+          "OBS-7"
+        ],
+        "contradicting": [
+          "OBS-17",
+          "OBS-10",
+          "OBS-13",
+          "OBS-8"
+        ],
+        "assumptions": [
+          "ASM-5"
+        ],
+        "predictions": [
+          "Orders‑service CPU, thread‑pool, or DB‑pool metrics would show saturation before 14:36.",
+          "Error rate would remain high even after market‑data‑service recovers."
+        ],
+        "confidence": 0.15,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.15,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "gap_unaddressed",
+          "severity": "blocking",
+          "detail": "Orders‑service CPU, thread‑pool, and DB‑connection‑pool metrics for 14:20‑15:05 have not been fetched (GAP‑10). Without them resource exhaustion cannot be verified.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "Early 5xx (14:36) could be unrelated to market‑data degradation; HYP‑1 explains later cascade but not the initial orders‑service errors.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "infrastructure",
+          "category": "infrastructure_failure",
+          "trigger": null
+        },
+        "mechanism": "A transient network, DNS, or load‑balancer issue between market‑data‑service and its external quotes vendor could make vendor requests appear to time out at 800 ms (OBS‑13/15). This would manifest as gRPC DEADLINE_EXCEEDED in portfolio‑service (OBS‑10) and cascade similarly to H1.",
+        "supporting": [
+          "OBS-13",
+          "OBS-15",
+          "OBS-4",
+          "OBS-3"
+        ],
+        "contradicting": [
+          "OBS-8",
+          "OBS-2"
+        ],
+        "assumptions": [
+          "ASM-6"
+        ],
+        "predictions": [
+          "Network‑level metrics (packet loss, RTT) to the vendor IP would show a spike at ~14:41.",
+          "No market‑data‑service code or config change would be found."
+        ],
+        "confidence": 0.1,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.1,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-4",
+          "kind": "gap_unaddressed",
+          "severity": "blocking",
+          "detail": "No network‑level metrics (packet loss, RTT) to the quotes vendor are available (GAP‑4), so an infra failure cannot be confirmed or ruled out.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-4",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "HYP‑1 is accepted and fully accounts for the observed vendor time‑outs; infra failure remains an untested alternative.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "deploy on portfolio-service at 14:48:30 UTC by ci/deploy-bot: portfolio-service v5.4.0: add sector breakdown to performance page (version: 5.4.0, previous_version: 5.3.2, commit: 3c7d0aa, diff: +410 / -88)",
+      "artifacts": [
+        "chg:2512"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-1",
+      "source": "change-census"
+    },
+    {
+      "statement": "A deploy of portfolio-service v5.4.0 was recorded at 2026-10-06T14:48:30Z (chg:2512).",
+      "artifacts": [
+        "chg:2512"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-2",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "edge-gateway calls portfolio-service over HTTP with a hard 3 s timeout.",
+      "artifacts": [
+        "dep:edge-gateway->portfolio-service"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-3",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "portfolio-service calls market-data-service via gRPC with a hard 500 ms timeout.",
+      "artifacts": [
+        "dep:portfolio-service->market-data-service"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-4",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "portfolio-service calls postgres-orders via SQL with a hard 2 s timeout.",
+      "artifacts": [
+        "dep:portfolio-service->postgres-orders"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-5",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "portfolio-service calls redis-cache via Redis with a soft 100 ms timeout.",
+      "artifacts": [
+        "dep:portfolio-service->redis-cache"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-6",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "edge-gateway also has hard dependencies on orders-service (3 s) and auth-service (1 s).",
+      "artifacts": [
+        "dep:edge-gateway->orders-service",
+        "dep:edge-gateway->auth-service"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-7",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "No config changes, feature-flag flips, secret rotations, or infra work were recorded for edge-gateway, market-data-service, postgres-orders, redis-cache, orders-service, or auth-service in the window.",
+      "artifacts": [
+        "chg:2512"
+      ],
+      "service": null,
+      "id": "OBS-8",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "The deploy added sector‑breakdown logic to the performance page (≈+410/−88 lines, commit 3c7d0aa).",
+      "artifacts": [
+        "chg:2512"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-9",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "portfolio-service gRPC calls to market-data-service began failing with DEADLINE_EXCEEDED at 14:42:01 UTC (679 occurrences by 15:05).",
+      "artifacts": [
+        "log:3096c4afe74b"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-10",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "portfolio-service error_rate rose from a baseline of 0.0022 to a peak of 0.074 (max) and was 0.052 at 15:05 UTC.",
+      "artifacts": [
+        "metric:portfolio-service/error_rate"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-11",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "portfolio-service latency_p99_ms increased from a baseline of 415 ms to a peak of 3513 ms (mean 1588 ms) during the window, with the last measured value 3093 ms at 15:05 UTC.",
+      "artifacts": [
+        "metric:portfolio-service/latency_p99_ms"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-12",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "market-data-service logged quotes‑vendor request timeouts (800 ms) starting at 14:41:01 UTC (1072 occurrences) and circuit‑breaker half‑open events from 14:47:02 UTC.",
+      "artifacts": [
+        "log:785c94c54006",
+        "log:a9fa5c6b6926"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-13",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "portfolio-service deploy v5.4.0 occurred at 14:48:30 UTC, after the onset of gRPC failures and latency spike.",
+      "artifacts": [
+        "chg:2512"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-14",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "market-data-service began emitting quotes‑vendor request time‑outs (800 ms) at 2026-10-06T14:41:01.233Z, with 1 072 occurrences through 15:04:59.",
+      "artifacts": [
+        "log:785c94c54006"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-15",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "market-data-service circuit breaker entered half‑open state at 2026-10-06T14:47:02.904Z (78 occurrences).",
+      "artifacts": [
+        "log:a9fa5c6b6926"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-16",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "orders-service started logging price‑check failures due to market-data-service DEADLINE_EXCEEDED at 2026-10-06T14:42:01.422Z, total 178 events until 15:04:53.",
+      "artifacts": [
+        "log:6f37ccdbcbc1"
+      ],
+      "service": "orders-service",
+      "id": "OBS-17",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "orders-service emitted 13 HTTP 5xx responses (e.g., DELETE /v1/orders/{id} 503) beginning 2026-10-06T14:36:48.465Z.",
+      "artifacts": [
+        "log:cdc0738b436d"
+      ],
+      "service": "orders-service",
+      "id": "OBS-18",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "orders-service logged 22 “insufficient buying power” rejections spread across the whole window (first at 14:20:41).",
+      "artifacts": [
+        "log:b6f43643b114"
+      ],
+      "service": "orders-service",
+      "id": "OBS-19",
+      "source": "r1-observability-3"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "Market‑data‑service had no deploy/config/flag change in the 14:30‑15:05 window.",
+      "reason": "Change census (OBS‑8) records none for the listed services.",
+      "id": "ASM-1",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The external quotes‑vendor latency spike (~800 ms) exceeds the 500 ms hard gRPC timeout, causing every downstream call to fail with DEADLINE_EXCEEDED.",
+      "reason": "Observed vendor timeout (OBS‑13/15) > portfolio‑service gRPC timeout (OBS‑4).",
+      "id": "ASM-2",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The new sector‑breakdown code is only reached on the performance‑page endpoint, not on the generic /v1/portfolio endpoint that is failing.",
+      "reason": "Deploy description mentions performance page; no evidence the generic endpoint uses the new logic.",
+      "id": "ASM-3",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "If the new code does call market‑data‑service, it would add latency on top of the existing vendor latency but not create the initial timeout.",
+      "reason": "Vendor time‑outs start at 14:41, before deploy at 14:48 (OBS‑14).",
+      "id": "ASM-4",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The early orders‑service 5xx at 14:36 are unrelated to the later cascade (no metrics showing saturation).",
+      "reason": "Only a few 5xx events, and later errors are explained by market‑data‑service failures (OBS‑17).",
+      "id": "ASM-5",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "No hidden infrastructure change (node‑pool resize, LB config, service‑mesh timeout tweak) occurred; GAP‑4 notes this is unknown.",
+      "reason": "Change census only covered seven services; infra changes could be missing.",
+      "id": "ASM-6",
+      "source": "r1-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "get_change_history",
+      "scope": "Full commit diff for portfolio-service commit 3c7d0aa",
+      "reason": "Only summary (+410/-88 lines) is available; need exact file/endpoint changes to map new DB/gRPC calls.",
+      "id": "GAP-1",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Changes for services not in the seven‑service list (shared libraries, service‑mesh config, DNS, infra)",
+      "reason": "Change census only covered the listed services; upstream infra changes could affect the path.",
+      "id": "GAP-2",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Feature‑flag state for portfolio-service around 14:48 UTC",
+      "reason": "A flag flip could enable the new sector‑breakdown only for some tenants, not captured as a deploy.",
+      "id": "GAP-3",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Infrastructure events (node‑pool resize, network policy, load‑balancer config) in the window",
+      "reason": "Not recorded in change‑census but could impact hard‑timeout paths.",
+      "id": "GAP-4",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Precise client‑side symptom onset timestamp",
+      "reason": "Report says “around when this started” at 15:05 UTC; exact error‑rate spike time would confirm coincidence with deploy.",
+      "id": "GAP-5",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "edge-gateway (WARN+ patterns 14:20‑15:05 UTC)",
+      "reason": "No log query executed for edge-gateway; cannot confirm propagation vs independent errors.",
+      "id": "GAP-6",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "edge-gateway (error_rate, latency_p99, rps 14:20‑15:05 UTC)",
+      "reason": "Metrics not fetched; needed to quantify gateway impact.",
+      "id": "GAP-7",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "postgres-orders (WARN+ patterns 14:20‑15:05 UTC)",
+      "reason": "No log query executed; unknown if DB contributed.",
+      "id": "GAP-8",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "postgres-orders (latency, error_rate, connections 14:20‑15:05 UTC)",
+      "reason": "Metrics not fetched; needed to rule out DB saturation.",
+      "id": "GAP-9",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "All metrics for orders-service, market-data-service, postgres-orders, redis-cache (summary and key series such as request latency, error rate, CPU, memory, connection pool usage, consumer lag).",
+      "reason": "Metrics were not fetched in the allocated steps; they are needed to quantify latency spikes, error rates, and saturation.",
+      "id": "GAP-10",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "postgres-orders logs at WARN/ERROR for 14:20‑15:05.",
+      "reason": "Postgres‑orders logs were not queried; they could reveal DB‑side contention or errors contributing to order rejections.",
+      "id": "GAP-11",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "orders-service DEBUG/INFO logs around 14:40‑14:45 to see request flow details.",
+      "reason": "Only WARN/ERROR patterns were retrieved; lower‑level logs may show retry logic or timeout configuration.",
+      "id": "GAP-12",
+      "source": "r1-observability-3"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Increase the portfolio‑service gRPC timeout to ≥800 ms (or add a short retry with back‑off) to absorb vendor latency spikes.",
+      "rationale": "Current 500 ms timeout is lower than observed vendor latency, causing immediate DEADLINE_EXCEEDED failures.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Enable a fast‑fail fallback in portfolio‑service (e.g., cached quotes) when market‑data‑service returns DEADLINE_EXCEEDED.",
+      "rationale": "Prevents downstream latency spikes and 5xx to clients while vendor latency is high.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Align timeout budgets across the call chain: set market‑data‑service vendor timeout ≤400 ms and portfolio‑service gRPC timeout ≥500 ms with a safety margin.",
+      "rationale": "Ensures upstream timeouts are longer than downstream calls, eliminating deadline mismatches.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add alerting on market‑data‑service vendor request latency >500 ms and circuit‑breaker half‑open transitions.",
+      "rationale": "Early detection of vendor degradation before it breaches downstream timeouts.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Retrieve full commit diff for portfolio‑service v5.4.0 (commit 3c7d0aa) and verify feature‑flag state at 14:48 UTC.",
+      "rationale": "Confirms whether new sector‑breakdown code could add extra gRPC/DB calls that amplify latency (GAP‑1, GAP‑3).",
+      "hypothesis_id": "HYP-2",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Collect orders‑service CPU, thread‑pool, and DB‑connection‑pool metrics for 14:20‑15:05 UTC.",
+      "rationale": "Determines if early 5xx at 14:36 UTC were due to resource exhaustion (GAP‑10).",
+      "hypothesis_id": "HYP-3",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Obtain network‑level metrics (packet loss, RTT) to the quotes vendor IP for the incident window.",
+      "rationale": "Rules out a transient infrastructure failure as an alternative cause (GAP‑4).",
+      "hypothesis_id": "HYP-4",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Query edge‑gateway logs and metrics (error_rate, latency_p99, rps) for 14:20‑15:05 UTC.",
+      "rationale": "Quantifies gateway impact and confirms propagation path (GAP‑6, GAP‑7).",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Query postgres‑orders logs and metrics (latency, error_rate, connections) for the same window.",
+      "rationale": "Rules out DB saturation contributing to order rejections (GAP‑8, GAP‑9, GAP‑11).",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "What caused the 13 HTTP 5xx responses from orders‑service starting at 14:36 UTC, before the vendor latency spike?",
+    "Exact code changes in portfolio‑service v5.4.0 (full diff) and whether a feature flag enabled the new sector‑breakdown for a subset of traffic.",
+    "State of any feature flags for portfolio‑service around 14:48 UTC.",
+    "Whether any infrastructure change (network policy, load‑balancer config, node‑pool resize) occurred that could affect the market‑data‑service → vendor path.",
+    "Edge‑gateway error‑rate and latency behavior during the incident to confirm it was purely downstream propagation.",
+    "Postgres‑orders health (latency, errors, connection pool) during the window to exclude DB‑side contribution."
+  ],
+  "termination": "the critic accepted HYP-1",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 19,
+    "tool_calls": 9,
+    "tokens": 78098,
+    "elapsed_s": 795.59
+  }
+}

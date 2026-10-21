@@ -1,0 +1,335 @@
+{
+  "incident_id": "T05",
+  "title": "Nobody can log in",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "At 06:00 UTC the TLS certificate used by auth-service expired (notAfter 2026-10-09T06:00:00Z). Both edge-gateway (client) and auth-service (server) immediately logged TLS‑handshake failures, causing a spike in edge‑gateway error_rate from 0.2 % to >11 % and 5xx on all POST /v1/session requests. The only production change in the preceding hour was an unrelated keep‑alive‑timeout increase on edge-gateway (chg:2541). No certificate‑rotation change was recorded. The root cause is a missed certificate rotation for auth-service.",
+  "root_cause": {
+    "service": "auth-service",
+    "category": "certificate_or_credential",
+    "trigger": null
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "auth-service",
+          "category": "certificate_or_credential",
+          "trigger": null
+        },
+        "mechanism": "The auth-service server TLS certificate expired at 06:00Z. Clients (edge-gateway) attempting TLS handshakes receive an expired certificate, causing handshake failures logged on both sides. Failed handshakes translate to 5xx responses for session routes.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-4"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "Renewing the auth-service certificate and reloading the service will eliminate TLS handshake errors and restore error_rate to baseline.",
+          "No other services that do not call auth-service will be affected."
+        ],
+        "confidence": 0.95,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.95,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "edge-gateway",
+          "category": "config_change",
+          "trigger": "chg:2541"
+        },
+        "mechanism": "Increasing the upstream keepalive timeout altered connection pooling in a way that caused TLS validation to fail.",
+        "supporting": [
+          "OBS-3"
+        ],
+        "contradicting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-5"
+        ],
+        "assumptions": [
+          "ASM-3"
+        ],
+        "predictions": [
+          "Reverting the keepalive timeout would immediately stop TLS errors."
+        ],
+        "confidence": 0.02,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.02,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "auth-service",
+          "category": "code_regression",
+          "trigger": null
+        },
+        "mechanism": "A recent (unrecorded) code change in auth-service introduced a bug that rejects valid client certificates, logging 'bad certificate'.",
+        "supporting": [
+          "OBS-2"
+        ],
+        "contradicting": [
+          "OBS-1",
+          "OBS-3",
+          "OBS-5"
+        ],
+        "assumptions": [
+          "ASM-4"
+        ],
+        "predictions": [
+          "Rolling back the auth-service deploy would stop the errors."
+        ],
+        "confidence": 0.02,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.02,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "platform",
+          "category": "infrastructure_failure",
+          "trigger": null
+        },
+        "mechanism": "An infrastructure‑level CA or certificate store expired, affecting both gateway and auth-service.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2"
+        ],
+        "contradicting": [
+          "OBS-3",
+          "OBS-5"
+        ],
+        "assumptions": [
+          "ASM-5"
+        ],
+        "predictions": [
+          "Other services using the same CA would show similar TLS failures."
+        ],
+        "confidence": 0.01,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.01,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "edge-gateway logged 1,428 TLS handshake failures with message 'certificate has expired or is not yet valid (notAfter 2026-10-09T06:00:00Z)' starting at 06:00:09.657Z.",
+      "artifacts": [
+        "log:6a1c72fa74da"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "auth-service logged 1,112 TLS handshake errors 'remote error: tls: bad certificate' starting at 06:00:06.184Z.",
+      "artifacts": [
+        "log:be1de505ee3a"
+      ],
+      "service": "auth-service",
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "The only change in the 05:00‑07:00 window for edge-gateway or auth-service was a config change on edge-gateway at 05:52:30Z raising upstream.keepalive_timeout_s from 60 to 75 (chg:2541).",
+      "artifacts": [
+        "chg:2541"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "edge-gateway error_rate metric rose from a baseline of 0.0021 to 0.1166 (≈55×) by 06:30Z.",
+      "artifacts": [
+        "metric:edge-gateway/error_rate"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "edge-gateway rps, latency_p50, latency_p99, cpu_util, and mem_util remained within normal ranges throughout the window.",
+      "artifacts": [
+        "metric:edge-gateway/rps",
+        "metric:edge-gateway/latency_p50_ms",
+        "metric:edge-gateway/latency_p99_ms",
+        "metric:edge-gateway/cpu_util",
+        "metric:edge-gateway/mem_util"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-5",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The notAfter timestamp in the TLS error messages reflects the actual expiry of the auth-service server certificate.",
+      "reason": "Both client and server logs cite the same notAfter value; no other component changed at that moment.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "No other component (gateway trust store, CA, load‑balancer) changed its certificate configuration at 06:00Z.",
+      "reason": "Change history shows only the unrelated keepalive timeout change; no secret_rotation or config_change for certificates.",
+      "id": "ASM-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Changing the keepalive timeout cannot cause TLS certificate validation failures.",
+      "reason": "Timeout changes affect connection reuse, not certificate verification logic.",
+      "id": "ASM-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "A code regression in auth-service would not produce the exact 'certificate has expired' message.",
+      "reason": "That message originates from the TLS library when validating the peer's certificate.",
+      "id": "ASM-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "A shared CA expiry would show the same notAfter on both client and server logs, which is not observed.",
+      "reason": "Only the server certificate's notAfter appears in the gateway logs.",
+      "id": "ASM-5",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "get_change_history",
+      "scope": "auth-service secret_rotation or certificate renewal",
+      "reason": "No secret_rotation change record found for auth-service before 06:00Z; expected a chg: entry for certificate renewal.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "AZ‑b log shards for edge-gateway and auth-service",
+      "reason": "Log shard for az-b was unavailable, potentially hiding early warnings or a partial rollout.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "auth-service TLS handshake failure counters",
+      "reason": "No auth-service metrics were queried; would help quantify impact on the auth side.",
+      "id": "GAP-3",
+      "source": "investigate"
+    },
+    {
+      "tool": "inspect_certificate",
+      "scope": "auth-service server certificate details",
+      "reason": "Direct certificate inspection (e.g., openssl) not available via current tooling to confirm expiry and SANs.",
+      "id": "GAP-4",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "service=edge-gateway, start=2026-10-09T05:15:00Z, end=2026-10-09T06:30:00Z",
+      "reason": "log shard for az-b is unavailable; results exclude pods in az-b",
+      "id": "GAP-5",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "service=auth-service, start=2026-10-09T05:15:00Z, end=2026-10-09T06:30:00Z",
+      "reason": "log shard for az-b is unavailable; results exclude pods in az-b",
+      "id": "GAP-6",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "fix",
+      "description": "Deploy a renewed TLS certificate to auth-service and reload/restart the service.",
+      "rationale": "Eliminates the expired certificate causing handshake failures (addresses hypothesis h1).",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Verify edge-gateway trust store contains the new certificate/CA and, if needed, update it.",
+      "rationale": "Ensures gateway accepts the renewed cert; prevents continued 5xx.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Run synthetic login and token‑refresh tests through edge-gateway to confirm error_rate returns to baseline (<0.5%).",
+      "rationale": "Validates end‑to‑end restoration of the session path.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add certificate‑expiry monitoring alerts (30‑day, 7‑day, 1‑day) for all services using mTLS.",
+      "rationale": "Detects upcoming expirations before they cause outages.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Record the certificate renewal as a secret_rotation change in the change‑history system and enforce a mandatory rotation workflow.",
+      "rationale": "Closes gap G1 and provides audit trail for future incidents.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Investigate why AZ‑b log shards were unavailable during the incident and remediate logging coverage.",
+      "rationale": "Removes gap G2 for future visibility.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Who owns the certificate lifecycle for auth-service and why was the rotation missed?",
+    "Was the certificate stored in a secret manager that failed to rotate automatically?",
+    "Did any other internal services that call auth-service experience failures not captured in the current logs?",
+    "Why were AZ‑b log shards unavailable at the time of the incident?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 7,
+    "tool_calls": 5,
+    "tokens": 43714,
+    "elapsed_s": 242.27
+  }
+}

@@ -1,0 +1,509 @@
+{
+  "incident_id": "T09",
+  "title": "Notification pods restarting",
+  "outcome": "inconclusive",
+  "outcome_reasons": [
+    "HYP-1 has unresolved blocking objections"
+  ],
+  "summary": "Notification‑service pods began OOM‑killing at 07:52 UTC after a deploy (v3.9.2) that added a per‑recipient‑locale template cache. Memory grew steadily, GC overhead exceeded 30 % from 07:35, and consumer lag spiked after the first restart. The leading hypothesis (HYP‑1) blames an unbounded cache introduced by the change, but the change record does not confirm the lack of eviction/TTL and no heap‑allocation data is available, leaving a blocking objection. A secondary hypothesis (HYP‑3) suggests the 1 GiB limit is simply too low for the new cache footprint, while an upstream traffic increase (HYP‑2) lacks supporting evidence. Because the investigation hit its time budget, the outcome is inconclusive.",
+  "root_cause": null,
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "code_regression",
+          "trigger": "chg:2591"
+        },
+        "mechanism": "Deploy v3.9.2 added a per‑recipient‑locale template cache with no eviction/TTL. Each distinct locale‑recipient pair creates a retained object, causing steady heap growth. GC overhead exceeds 30 % from 07:35, memory climbs to the 1 GiB limit, pods are OOM‑killed starting 07:52, and consumer lag spikes after the first restart.",
+        "supporting": [
+          "OBS-1",
+          "OBS-5",
+          "OBS-7",
+          "OBS-8",
+          "OBS-9",
+          "OBS-10",
+          "OBS-12",
+          "OBS-13",
+          "OBS-16",
+          "OBS-18",
+          "OBS-19",
+          "OBS-20"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "Heap histogram shows a dominant allocation site in the new TemplateCache class.",
+          "Cache size metric (if present) grows monotonically during the window."
+        ],
+        "confidence": 0.78,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.5,
+      "calibration": [
+        "it has unresolved blocking objections"
+      ],
+      "confidence_band": "medium",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "No heap histogram or allocation‑site data is available (GAP‑10, GAP‑11). The tools cannot provide source‑level allocation profiles, so the claim that the new TemplateCache class dominates allocations cannot be verified directly.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "The hypothesis asserts the cache has no eviction/TTL, but the change record (chg:2591) only notes '+88/-21 lines – cache rendered templates per recipient locale' and does not describe eviction policy. This claim rests on assumption ASM‑1/ASM‑2 rather than observed evidence.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "An unrecorded config/feature‑flag change in orders‑service or payments‑service increased the average Kafka message size or batch size around 07:45‑07:50. Larger payloads per poll raise per‑message processing memory, triggering GC pressure and OOM kills; the lag jump at 07:53 is a direct result of slower consumption.",
+        "supporting": [
+          "OBS-3",
+          "OBS-4",
+          "OBS-10",
+          "OBS-12",
+          "OBS-17"
+        ],
+        "contradicting": [
+          "OBS-5",
+          "OBS-6",
+          "OBS-13",
+          "OBS-16"
+        ],
+        "assumptions": [
+          "ASM-3",
+          "ASM-4"
+        ],
+        "predictions": [
+          "Kafka producer byte‑rate or max request size for the consumed topics shows a step increase near 07:45.",
+          "Notification‑service fetch‑size per poll rises correspondingly."
+        ],
+        "confidence": 0.32,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.32,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "capacity_saturation",
+          "trigger": "chg:2591"
+        },
+        "mechanism": "The new caching feature is correctly bounded, but the 1 GiB memory limit is insufficient for the additional cache footprint under normal traffic. Memory utilization rises to ~0.97 GiB and crosses the limit, causing OOM kills; GC overhead is a symptom of the near‑limit heap.",
+        "supporting": [
+          "OBS-8",
+          "OBS-9"
+        ],
+        "contradicting": [
+          "OBS-7",
+          "OBS-10"
+        ],
+        "assumptions": [
+          "ASM-5"
+        ],
+        "predictions": [
+          "Cache size plateaus at a value that, added to baseline heap, exceeds 1 GiB.",
+          "Increasing the memory limit (without code change) would stop OOM kills."
+        ],
+        "confidence": 0.15,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.15,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "HYP‑1 (unbounded cache) explains the same memory‑growth and GC‑overhead pattern and has not been ruled out. Until HYP‑1 is falsified, capacity‑saturation cannot be accepted as the sole cause. (not blocking: this review rejected HYP-1 or found it flawed)",
+          "alternative": "HYP-1",
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "deploy on notification-service at 07:12:30 UTC by ci/deploy-bot: notification-service v3.9.2: cache rendered templates per recipient locale (version: 3.9.2, previous_version: 3.9.1, commit: 0f6c3a8, diff: +88 / -21)",
+      "artifacts": [
+        "chg:2591"
+      ],
+      "service": "notification-service",
+      "id": "OBS-1",
+      "source": "change-census"
+    },
+    {
+      "statement": "notification-service has a hard Kafka consumer dependency (dep:notification-service->kafka).",
+      "artifacts": [
+        "dep:notification-service->kafka"
+      ],
+      "service": "notification-service",
+      "id": "OBS-3",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "orders-service and payments-service each have a soft Kafka producer dependency (dep:orders-service->kafka, dep:payments-service->kafka).",
+      "artifacts": [
+        "dep:orders-service->kafka",
+        "dep:payments-service->kafka"
+      ],
+      "service": "orders-service",
+      "id": "OBS-4",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "The deploy (chg:2591) adds per‑recipient‑locale template caching (+88/‑21 lines) – a consumer‑side modification that does not change the schema, size, or production rate of messages placed on Kafka.",
+      "artifacts": [
+        "chg:2591"
+      ],
+      "service": "notification-service",
+      "id": "OBS-5",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "Because no upstream service (orders-service, payments-service, kafka) recorded any change in the window, there is no documented change that could have increased the volume or size of messages flowing into Kafka and thus into notification-service.",
+      "artifacts": [
+        "chg:2591"
+      ],
+      "service": "kafka",
+      "id": "OBS-6",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "GC overhead warnings (>30 % time in GC) appear continuously from 07:35:06 to 08:19:52 (153 occurrences).",
+      "artifacts": [
+        "log:f681f54530df"
+      ],
+      "service": "notification-service",
+      "id": "OBS-7",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Pods are OOMKilled (memory limit 1 GiB) starting at 07:52:13 and recurring every few minutes until 08:19:40 (20 occurrences).",
+      "artifacts": [
+        "log:c39fab989944"
+      ],
+      "service": "notification-service",
+      "id": "OBS-8",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Memory utilization rose from 0.55 (baseline 0.55) at 07:05 to 0.97 at 08:20, exceeding the 1 GiB limit and triggering OOM kills.",
+      "artifacts": [
+        "metric:notification-service/mem_util"
+      ],
+      "service": "notification-service",
+      "id": "OBS-9",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Consumer lag stayed near baseline (≈100 messages) through 07:50, then jumped to 2,981 at 07:53 and climbed to 53,110 by 08:17 (baseline 126 messages).",
+      "artifacts": [
+        "metric:notification-service/consumer_lag"
+      ],
+      "service": "notification-service",
+      "id": "OBS-10",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Request rate modestly rose from 101 rps at 07:05 to 119 rps at 08:20 (baseline 103 rps), while p99 latency remained roughly flat (≈250 ms).",
+      "artifacts": [
+        "metric:notification-service/rps",
+        "metric:notification-service/latency_p99_ms"
+      ],
+      "service": "notification-service",
+      "id": "OBS-12",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Change census for orders‑service, payments‑service, kafka and notification‑service shows a single entry: notification‑service deploy v3.9.2 at 07:12:30 UTC (chg:2591).",
+      "artifacts": [
+        "chg:2591"
+      ],
+      "service": "notification-service",
+      "id": "OBS-13",
+      "source": "r1-dependency-3"
+    },
+    {
+      "statement": "Deploy chg:2591 adds per‑recipient‑locale template caching (+88/‑21 lines) – a consumer‑side change that does not modify message schema, size, or production rate.",
+      "artifacts": [
+        "chg:2591"
+      ],
+      "service": "notification-service",
+      "id": "OBS-16",
+      "source": "r1-dependency-3"
+    },
+    {
+      "statement": "Consumer lag remained at baseline (~100 msg) until ~07:50, then jumped to ~3 k at 07:53 and climbed to >53 k by 08:17.",
+      "artifacts": [
+        "metric:notification-service/consumer_lag"
+      ],
+      "service": "notification-service",
+      "id": "OBS-17",
+      "source": "r1-dependency-3"
+    },
+    {
+      "statement": "GC overhead warnings (>30 % time in GC) appear continuously from 07:35:06 to 08:19:52.",
+      "artifacts": [
+        "log:f681f54530df"
+      ],
+      "service": "notification-service",
+      "id": "OBS-18",
+      "source": "r1-dependency-3"
+    },
+    {
+      "statement": "First OOM kill of notification‑service pods occurs at 07:52:13, with recurring kills every few minutes until 08:19.",
+      "artifacts": [
+        "log:c39fab989944",
+        "metric:notification-service/mem_util"
+      ],
+      "service": "notification-service",
+      "id": "OBS-19",
+      "source": "r1-dependency-3"
+    },
+    {
+      "statement": "First GC‑overhead‑high warning (37 % time in GC) logged at 07:35:06 UTC; warnings continue every few seconds across both pods until 08:19:52 UTC (153 total occurrences).",
+      "artifacts": [
+        "log:f681f54530df",
+        "log:a27feba5d8ae",
+        "log:cc8a2069509d"
+      ],
+      "service": "notification-service",
+      "id": "OBS-20",
+      "source": "r1-observability-4"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The per‑recipient‑locale cache introduced in v3.9.2 has no eviction or TTL and therefore accumulates one entry per distinct locale‑recipient pair.",
+      "reason": "The deploy description mentions caching but does not state any size limit; typical template‑caching implementations retain entries indefinitely unless configured otherwise.",
+      "id": "ASM-1",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The 1 GiB memory limit was sufficient for v3.9.1; the extra cache pushes the process over the limit.",
+      "reason": "Baseline memory utilization was stable at 0.55 GiB before the deploy (OBS‑9).",
+      "id": "ASM-2",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "A silent config or feature‑flag change on orders‑service or payments‑service increased average payload size or batch size around 07:45‑07:50.",
+      "reason": "No deploy or config change is recorded for those services in the change census (OBS‑2, OBS‑13), but such changes can be applied via feature flags outside the census.",
+      "id": "ASM-3",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "Notification‑service’s Kafka consumer does not enforce a per‑poll memory bound, so larger messages directly increase heap pressure.",
+      "reason": "Typical Kafka consumers fetch batches up to max.poll.records/bytes; if those limits were not lowered, larger messages increase per‑poll allocation.",
+      "id": "ASM-4",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "The cache’s maximum entry count is proportional to active locales × recipients and grows with traffic, so even a bounded cache could exceed the 1 GiB limit under normal load.",
+      "reason": "Memory limit is a hard container limit; any additional fixed overhead reduces headroom.",
+      "id": "ASM-5",
+      "source": "r1-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "get_change_history",
+      "scope": "kafka broker configuration, topic partition changes, message.max.bytes adjustments",
+      "reason": "Change‑census does not capture infra‑level Kafka config changes that could affect inbound message size.",
+      "id": "GAP-1",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "feature‑flag toggles or secret rotations for notification-service, orders-service, payments-service, kafka",
+      "reason": "Flag flips or secret rotations are not represented as deploys in the census.",
+      "id": "GAP-2",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_service_dependencies",
+      "scope": "dependency graph depth limited to 2 hops",
+      "reason": "Possible indirect producers (e.g., scheduler or batch jobs) feeding Kafka are not shown.",
+      "id": "GAP-3",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "metrics collection (not invoked)",
+      "scope": "Kafka producer/consumer rates, message sizes, notification‑service pod memory/GC",
+      "reason": "No metric snapshots were provided; without them we cannot confirm a traffic surge.",
+      "id": "GAP-4",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "notification-service mem_util per‑minute series",
+      "reason": "Only summary statistics were returned; step‑size limited to 3 min for consumer_lag and no high‑resolution mem_util series available within step budget.",
+      "id": "GAP-5",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "kafka broker logs (WARN/ERROR) for the same window",
+      "reason": "Assignment limited to notification-service and kafka services, but kafka logs were not queried; they could reveal broker‑side back‑pressure or fetch errors.",
+      "id": "GAP-6",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "kafka consumer‑group metrics (fetch‑rate, records‑consumed‑rate) for the notification-service group",
+      "reason": "Not fetched; needed to confirm whether processing rate dropped after each OOM restart.",
+      "id": "GAP-7",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "get_metric",
+      "scope": "Kafka producer metrics for orders‑service and payments‑service topics (rate, bytes, request size)",
+      "reason": "Needed to definitively rule out a silent upstream traffic increase.",
+      "id": "GAP-8",
+      "source": "r1-dependency-3"
+    },
+    {
+      "tool": "get_logs",
+      "scope": "Schema registry or topic‑level logs for any undeclared schema/serialization changes on the upstream topics",
+      "reason": "A schema change without a deploy record could alter payload size.",
+      "id": "GAP-9",
+      "source": "r1-dependency-3"
+    },
+    {
+      "tool": "get_profile",
+      "scope": "Notification‑service heap histogram / allocation sites during 07:35‑08:20",
+      "reason": "To confirm whether the per‑locale cache introduced by chg:2591 is the primary memory consumer.",
+      "id": "GAP-10",
+      "source": "r1-dependency-3"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "notification-service logs 07:00‑08:20 UTC for allocation‑rate or detailed GC output",
+      "reason": "The log store returned zero matching records for 'allocation' and only generic GC‑overhead warnings; detailed heap/GC allocation logs are not available.",
+      "id": "GAP-11",
+      "source": "r1-observability-4"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Roll back notification‑service to v3.9.1 or temporarily raise the pod memory limit above 1 GiB.",
+      "rationale": "Stops the immediate OOM kills and restores notification delivery while the root cause is verified.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Increase the notification‑service memory limit to 1.5 GiB as a short‑term safeguard.",
+      "rationale": "If the cache is bounded but the limit is insufficient (HYP‑3), this prevents further OOM kills without code changes.",
+      "hypothesis_id": "HYP-3",
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Add explicit eviction/TTL policy to the per‑locale template cache introduced in chg:2591.",
+      "rationale": "Directly addresses the unbounded‑cache claim in HYP‑1; eliminates steady heap growth if the cache is the culprit.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "fix",
+      "description": "If the cache is already bounded, adjust the cache size configuration so total heap stays comfortably below the limit.",
+      "rationale": "Resolves the capacity‑saturation scenario of HYP‑3.",
+      "hypothesis_id": "HYP-3",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add a heap‑usage alert (e.g., >80 % of limit) and GC‑overhead alert (>20 % time in GC) for notification‑service.",
+      "rationale": "Early detection of memory pressure before OOM kills recur.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Enforce code‑review checklist item: any new in‑process cache must declare eviction/TTL and have a size metric.",
+      "rationale": "Prevents future unbounded‑cache regressions.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Collect a heap histogram / allocation‑site profile for notification‑service during the 07:35‑08:20 window (GAP‑10).",
+      "rationale": "Confirms whether the TemplateCache class dominates allocations, resolving the blocking objection on HYP‑1.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Query Kafka producer metrics for orders‑service and payments‑service (byte‑rate, request size) and broker logs for the same window (GAP‑8, GAP‑6).",
+      "rationale": "Rules out an undocumented upstream traffic or message‑size increase (HYP‑2).",
+      "hypothesis_id": "HYP-2",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Check feature‑flag / secret‑rotation audit logs for notification‑service, orders‑service, payments‑service, and Kafka (GAP‑2).",
+      "rationale": "Ensures no hidden config change altered payload size or consumer behavior.",
+      "hypothesis_id": "HYP-2",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Validate whether the cache implementation in chg:2591 includes eviction/TTL by reviewing the source diff and any related config.",
+      "rationale": "Directly addresses the unsupported‑claim objection on HYP‑1 (ASM‑1/ASM‑2).",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    }
+  ],
+  "open_questions": [
+    "Does the per‑recipient‑locale template cache have an eviction or TTL policy, or is it truly unbounded?",
+    "What does a heap histogram show – is the TemplateCache class the dominant allocation site during the incident?",
+    "Did any upstream service (orders‑service, payments‑service, or Kafka) experience an undocumented config/feature‑flag change that increased message size or rate around 07:45‑07:50?",
+    "Are there Kafka broker configuration changes (e.g., message.max.bytes) not captured in the change census that could affect inbound payload size?",
+    "Is the 1 GiB memory limit fundamentally insufficient for the new cache footprint under normal traffic, or would a modest limit increase suffice?",
+    "Why are detailed GC allocation logs unavailable for notification‑service, and can logging be improved for future incidents?"
+  ],
+  "termination": "time budget reached",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 27,
+    "tool_calls": 14,
+    "tokens": 124042,
+    "elapsed_s": 1141.23
+  }
+}

@@ -1,0 +1,449 @@
+{
+  "incident_id": "T01",
+  "title": "Order edits failing",
+  "outcome": "inconclusive",
+  "outcome_reasons": [
+    "HYP-1 has unresolved blocking objections"
+  ],
+  "summary": "Order edits began failing at ~13:35 UTC with a NullPointerException in AmendOrderHandler.validate after the orders‑service v2.15.0 deploy (commit e4a91c2) at 13:31 UTC. The error rate on orders‑service jumped from ~0.2 % to >4 % while latency stayed flat, and edge‑gateway returned 5xx on /v1/orders. Two plausible explanations remain: (1) the new amendment endpoint lacks a null‑check on a price/quantity field (code regression, HYP‑1) and (2) a subset of existing open orders have NULL limitPrice/quantity, which the new validator now dereferences (data issue, HYP‑2). The investigation was stopped after two rounds because the full file‑level diff for the commit was not retrieved (GAP‑11) and the database could not be queried for NULL values, leaving both hypotheses unruled‑out. The outcome is therefore inconclusive.",
+  "root_cause": null,
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "code_regression",
+          "trigger": "chg:2501"
+        },
+        "mechanism": "The v2.15.0 deploy added a new order‑amendment endpoint. In AmendOrderHandler.validate a null‑check on a price/quantity field (e.g., order.limitPrice) was omitted. Every PATCH /v1/orders request that touches an order with that field null throws a NullPointerException, which bubbles up as HTTP 500 to edge‑gateway, producing the observed edit‑failure spike.",
+        "supporting": [
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-17",
+          "OBS-18",
+          "OBS-20"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-6",
+          "ASM-7"
+        ],
+        "predictions": [
+          "Full diff of commit e4a91c2 will show a missing null‑check in AmendOrderHandler.validate",
+          "Orders‑service metrics will show a sharp error‑rate spike without latency or saturation increase"
+        ],
+        "confidence": 0.71,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.5,
+      "calibration": [
+        "it has unresolved blocking objections"
+      ],
+      "confidence_band": "medium",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "gap_unaddressed",
+          "severity": "blocking",
+          "detail": "The full file‑level diff for commit e4a91c2 (the missing null‑check in AmendOrderHandler.validate) has not been retrieved (GAP‑11). Without it we cannot confirm the code regression.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "alternative_not_excluded",
+          "severity": "blocking",
+          "detail": "HYP‑2 (data issue) offers an equally plausible explanation for the NPE and has not been ruled out.",
+          "alternative": "HYP-2",
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "data_issue",
+          "trigger": "chg:2501"
+        },
+        "mechanism": "The new amendment endpoint validates fields that older endpoints ignored (e.g., limitPrice). A subset of existing open orders have that column set to NULL in Postgres. When the new validator runs it dereferences the null value, causing the NPE. The deploy is the trigger because the validation logic did not exist before.",
+        "supporting": [
+          "OBS-2",
+          "OBS-3",
+          "OBS-5",
+          "OBS-17",
+          "OBS-18"
+        ],
+        "contradicting": [
+          "OBS-22"
+        ],
+        "assumptions": [
+          "ASM-8",
+          "ASM-9"
+        ],
+        "predictions": [
+          "DB query will reveal at least one open order with NULL limitPrice or quantity",
+          "Validator code lacks a defensive null guard for that field"
+        ],
+        "confidence": 0.18,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.18,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "Database contents (NULL limitPrice/quantity on open orders) cannot be queried with the available tooling; this evidence gap is a limitation rather than a blockable tool query.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "alternative_not_excluded",
+          "severity": "blocking",
+          "detail": "HYP‑1 (code regression) also explains the observations and has not been excluded.",
+          "alternative": "HYP-1",
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "config_change",
+          "trigger": "chg:2501"
+        },
+        "mechanism": "The deploy also shipped an undeclared configuration change (e.g., a feature‑flag default or thread‑pool size) that altered the request‑processing pipeline, causing the validator to be invoked with a partially‑initialized request object, leading to the NPE.",
+        "supporting": [
+          "OBS-2",
+          "OBS-3",
+          "OBS-17",
+          "OBS-21"
+        ],
+        "contradicting": [
+          "OBS-8",
+          "OBS-22",
+          "OBS-18"
+        ],
+        "assumptions": [
+          "ASM-10"
+        ],
+        "predictions": [
+          "Commit diff will contain a configuration file change or new feature‑flag default",
+          "Runtime config inspection will show the new setting active after 13:31 UTC"
+        ],
+        "confidence": 0.07,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.07,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Change census shows no config change in the relevant window (OBS‑8, OBS‑22), directly contradicting the claim of an undeclared config change.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "deploy on orders-service at 13:31:20 UTC by ci/deploy-bot: orders-service v2.15.0: add order amendment endpoint (version: 2.15.0, previous_version: 2.14.3, commit: e4a91c2, diff: +296 / -41)",
+      "artifacts": [
+        "chg:2501"
+      ],
+      "service": "orders-service",
+      "id": "OBS-2",
+      "source": "change-census"
+    },
+    {
+      "statement": "orders‑service logs show a NullPointerException in AmendOrderHandler.validate (PATCH /v1/orders/<order>) starting at 2026-10-05T13:33:01.127Z, occurring 413 times through 13:57:50Z.",
+      "artifacts": [
+        "log:0953dd5b47dc"
+      ],
+      "service": "orders-service",
+      "id": "OBS-3",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "edge‑gateway logs show upstream orders‑service returning 500 on route /v1/orders starting at 2026-10-05T13:34:05.896Z, 379 occurrences through 13:57:54Z.",
+      "artifacts": [
+        "log:a41f996d606e"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-4",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "edge‑gateway error_rate rises from a baseline mean of 0.0020 to a period mean of 0.0045 (max 0.0118) during the window, with the last recorded value at 0.0077.",
+      "artifacts": [
+        "metric:edge-gateway/error_rate"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-5",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "No other changes (deploy, config, feature‑flag, secret rotation, infra) were recorded for edge‑gateway, market‑data‑service, quotes‑vendor, or postgres‑orders in the 12:50‑13:58 UTC window.",
+      "artifacts": [
+        "chg:2501"
+      ],
+      "service": null,
+      "id": "OBS-8",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "orders‑service error_rate jumps from ~0.002 at 13:30‑13:32 to >0.04 beginning at 13:33, reaching a max of 0.066 at 13:45 and staying elevated through 13:54 (baseline_mean = 0.00186).",
+      "artifacts": [
+        "metric:orders-service/error_rate"
+      ],
+      "service": "orders-service",
+      "id": "OBS-17",
+      "source": "r2-observability-4"
+    },
+    {
+      "statement": "orders‑service latency_p99_ms remains stable, ranging 209‑304 ms with a period mean of 263 ms versus a baseline_mean of 260 ms; no latency spike coincides with the error‑rate rise.",
+      "artifacts": [
+        "metric:orders-service/latency_p99_ms"
+      ],
+      "service": "orders-service",
+      "id": "OBS-18",
+      "source": "r2-observability-4"
+    },
+    {
+      "statement": "The deploy timestamp precedes the first observed NullPointerException in AmendOrderHandler.validate (13:33:01Z) and the increase in edge‑gateway 5xx on /v1/orders (13:34:05Z).",
+      "artifacts": [
+        "chg:2501",
+        "log:0953dd5b47dc",
+        "log:a41f996d606e"
+      ],
+      "service": "orders-service",
+      "id": "OBS-20",
+      "source": "r2-dependency-5"
+    },
+    {
+      "statement": "Hard‑dependency chain confirmed: edge‑gateway → orders‑service (hard). Therefore any failure in orders‑service propagates directly to the gateway.",
+      "artifacts": [
+        "dep:edge-gateway->orders-service"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-21",
+      "source": "r2-dependency-5"
+    },
+    {
+      "statement": "No other production changes (deploy, config, feature‑flag, secret‑rotation, infra) were recorded for orders‑service, edge‑gateway, market‑data‑service, quotes‑vendor, or postgres‑orders in the 12:50‑13:58 UTC window besides the above deploy.",
+      "artifacts": [
+        "chg:2501"
+      ],
+      "service": "orders-service",
+      "id": "OBS-22",
+      "source": "r2-dependency-5"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The missing null‑check resides in the new AmendOrderHandler.validate method introduced by the +296/-41 diff.",
+      "reason": "Only the amendment endpoint is new; older endpoints work, and the NPE appears only on that path (OBS-3).",
+      "id": "ASM-6",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The stack trace points to a line inside AmendOrderHandler.validate, not a downstream library.",
+      "reason": "Log excerpt cites AmendOrderHandler.validate as the location of the NullPointerException (OBS-3).",
+      "id": "ASM-7",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "At least one open order in postgres‑orders has a NULL limitPrice (or quantity) column.",
+      "reason": "No evidence otherwise; the new validator would only fail on such rows.",
+      "id": "ASM-8",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The validator does not contain a defensive null guard for that field.",
+      "reason": "Otherwise the NPE would not be thrown; the diff summary suggests new validation logic without mention of null handling.",
+      "id": "ASM-9",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The deploy artifact includes an undocumented configuration change (e.g., a feature‑flag default).",
+      "reason": "Change census reports only code diff; a hidden config change could explain altered request handling.",
+      "id": "ASM-10",
+      "source": "r2-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_metrics",
+      "scope": "orders-service, market-data-service, postgres-orders",
+      "reason": "Metrics for these services were not fetched within the step limit; needed to confirm latency/error‑rate behavior and any circuit‑breaker trips.",
+      "id": "GAP-1",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "market-data-service, postgres-orders",
+      "reason": "Log patterns at WARN/ERROR for these services were not retrieved; could reveal upstream failures or timeouts.",
+      "id": "GAP-2",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "orders-service deploy details (full commit diff)",
+      "reason": "Change census only returned summary; the diff is needed to pinpoint code that could break price/quantity edits.",
+      "id": "GAP-3",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "observability platform (metrics/logs)",
+      "scope": "Real‑time error rates, latencies, and logs for orders-service, market-data-service, postgres-orders around 13:35 UTC",
+      "reason": "Telemetry not yet collected; required to correlate deploy with symptom onset.",
+      "id": "GAP-4",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "external status page / vendor SLA dashboard",
+      "scope": "quotes-vendor health during 13:30‑13:55 UTC",
+      "reason": "External dependency not covered by internal change census; could contribute to hard‑dependency failures.",
+      "id": "GAP-5",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "per‑minute vendor_error_rate and vendor_latency_p99_ms for 13:30‑13:45 UTC",
+      "reason": "Summary metrics mask short spikes that could align exactly with the edit‑failure onset.",
+      "id": "GAP-6",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "search market-data-service ERROR logs for strings timeout, deadline, 800ms in 12:50‑13:58 UTC",
+      "reason": "Absence of timeout logs not confirmed; need explicit search for timeout‑related messages.",
+      "id": "GAP-7",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "trace",
+      "scope": "trace an order‑edit request to see call chain to market-data-service/quotes‑vendor",
+      "reason": "Call graph unknown; required to link vendor errors to order‑edit failures.",
+      "id": "GAP-8",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "orders-service thread‑pool queue saturation",
+      "reason": "Metric not listed among available series for orders-service.",
+      "id": "GAP-9",
+      "source": "r2-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "orders-service DB‑pool usage (in‑use vs max connections)",
+      "reason": "Only db_pool_in_use and db_pool_max_connections exist as separate series; no combined usage ratio or saturation metric was exposed for the requested window.",
+      "id": "GAP-10",
+      "source": "r2-observability-4"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "file-level diff for AmendOrderHandler.validate in commit e4a91c2",
+      "reason": "The change record only provides a summary diff (+296/-41) and does not include the specific source changes needed to confirm the missing null‑check.",
+      "id": "GAP-11",
+      "source": "r2-dependency-5"
+    },
+    {
+      "tool": "observability_logs",
+      "scope": "full stack trace details (line number, variable name) for log:0953dd5b47dc",
+      "reason": "Current log excerpt shows only the exception type and location; the exact null variable is not visible.",
+      "id": "GAP-12",
+      "source": "r2-dependency-5"
+    },
+    {
+      "tool": "metrics",
+      "scope": "orders-service error_rate, request_rate, latency around 13:30‑13:40 UTC",
+      "reason": "Metrics for orders-service were not queried; they are needed to correlate the deploy with the observed error spike.",
+      "id": "GAP-13",
+      "source": "r2-dependency-5"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Roll back orders‑service to version 2.14.3 (the last known good release).",
+      "rationale": "Stops the NPE‑driven 5xx errors immediately while the root cause is being confirmed; addresses both HYP‑1 and HYP‑2.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Retrieve the full file‑level diff for commit e4a91c2 (AmendOrderHandler.validate) to verify whether a null‑check is missing.",
+      "rationale": "Directly tests the code‑regression hypothesis (HYP‑1) and closes GAP‑11.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Query the orders database for any open orders where limitPrice or quantity columns are NULL.",
+      "rationale": "Determines whether pre‑existing NULL data can trigger the NPE (HYP‑2).",
+      "hypothesis_id": "HYP-2",
+      "urgency": "soon"
+    },
+    {
+      "kind": "fix",
+      "description": "Add a defensive null‑check (or default handling) for the price/quantity field in AmendOrderHandler.validate and redeploy.",
+      "rationale": "Removes the code path that throws NPE if the regression is confirmed (HYP‑1).",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add an integration test that creates an order with NULL limitPrice/quantity and exercises the PATCH /v1/orders amendment endpoint.",
+      "rationale": "Ensures future changes cannot re‑introduce the missing null guard (covers HYP‑1 and HYP‑2).",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Enhance the change‑census pipeline to automatically surface file‑level diffs for critical services on each deploy.",
+      "rationale": "Eliminates the evidence gap (GAP‑11) for future incidents.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Does commit e4a91c2 actually omit a null‑check in AmendOrderHandler.validate?",
+    "Are there open orders in Postgres with NULL limitPrice or quantity columns?",
+    "What is the exact variable and line number causing the NullPointerException (full stack trace)?",
+    "Could an undeclared configuration change have been introduced despite OBS‑22 indicating none?",
+    "Did any downstream dependency (market‑data‑service, quotes‑vendor) contribute to the failure window?"
+  ],
+  "termination": "reached the limit of 2 rounds",
+  "stats": {
+    "rounds": 2,
+    "model_calls": 30,
+    "tool_calls": 12,
+    "tokens": 139642,
+    "elapsed_s": 794.52
+  }
+}

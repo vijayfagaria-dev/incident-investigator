@@ -1,0 +1,455 @@
+{
+  "incident_id": "T08",
+  "title": "Deposits and checkout failing overnight",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "Deposits and checkout began failing shortly after 02:00 UTC when Vault rotated the PostgreSQL password for the payments_app user (v31→v32). Payments‑service pods do not automatically reload the secret, so existing connections started failing with “FATAL: password authentication failed”, the DB connection pool drained, and request handlers for /v1/checkout and /v1/deposits returned 500. Health checks remained green because they do not execute a DB query. The investigation concluded this mechanism (HYP‑1, confidence 0.86) as the root cause. The early 504 responses on /v1/withdrawals starting at 01:34 UTC remain unexplained.",
+  "root_cause": {
+    "service": "postgres-payments",
+    "category": "certificate_or_credential",
+    "trigger": "chg:2581"
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "postgres-payments",
+          "category": "certificate_or_credential",
+          "trigger": "chg:2581"
+        },
+        "mechanism": "Vault rotated the PostgreSQL password for payments_app at 02:00:05 UTC (v31→v32). Payments‑service does not automatically reload the secret, so existing pods keep using the old password. New DB connections fail with “FATAL: password authentication failed”, the connection pool drains (in‑use drops from ~5.3 to 2), and request handlers for /v1/checkout and /v1/deposits return 500. Health checks stay green because they do not exercise a DB query.",
+        "supporting": [
+          "OBS-2",
+          "OBS-7",
+          "OBS-20",
+          "OBS-6",
+          "OBS-9",
+          "OBS-19"
+        ],
+        "contradicting": [
+          "OBS-8",
+          "OBS-5"
+        ],
+        "assumptions": [
+          "ASM-5",
+          "ASM-6"
+        ],
+        "predictions": [
+          "postgres‑payments authentication‑failure counter spikes sharply after 02:00 UTC",
+          "payments‑service request logs for /v1/checkout and /v1/deposits contain PostgreSQL FATAL password‑auth exceptions",
+          "Restarting payments‑service pods (or sending SIGHUP) restores successful DB connections and eliminates 500s"
+        ],
+        "confidence": 0.86,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.86,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": "accept",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "Early 504 responses on /v1/withdrawals starting at 01:34 (OBS-8) are not explained by the secret‑rotation mechanism; they may be unrelated but remain an open gap.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "bank-rails",
+          "category": "dependency_degradation",
+          "trigger": "chg:2578"
+        },
+        "mechanism": "At 01:38:20 UTC the bank‑rails client timeout was raised from 4000 ms to 5000 ms. An unrecorded bank‑rails slowdown (e.g., maintenance) began shortly before, causing downstream latency to approach the new timeout. Payments‑service started returning 504s for withdrawals and later 500s at the gateway.",
+        "supporting": [
+          "OBS-1",
+          "OBS-13",
+          "OBS-5",
+          "OBS-8"
+        ],
+        "contradicting": [
+          "OBS-8",
+          "OBS-7",
+          "OBS-6",
+          "OBS-11",
+          "OBS-15"
+        ],
+        "assumptions": [
+          "ASM-7",
+          "ASM-8"
+        ],
+        "predictions": [
+          "bank‑rails latency metrics show a sustained spike approaching or exceeding 5 s after 01:38 UTC",
+          "bank‑rails error‑rate (5xx) rises in the same window",
+          "payments‑service logs contain timeout / circuit‑breaker exceptions from the bank‑rails client rather than DB auth errors"
+        ],
+        "confidence": 0.12,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.12,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "Claims an unrecorded bank‑rails slowdown caused timeouts, but no latency or error‑rate metrics for bank‑rails show a spike near the 5 s timeout (OBS-5 shows only 489 ms).",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Ignores the observed PostgreSQL password‑auth failures (OBS-7, OBS-20) and the corresponding connection‑pool drain (OBS-6, OBS-19) that line up with the secret rotation.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "payments-service",
+          "category": "unknown",
+          "trigger": null
+        },
+        "mechanism": "A latent bug in payments‑service (e.g., connection‑pool leak or error‑handling flaw) was triggered by the combination of longer bank‑rails calls and the credential rotation, causing spontaneous 500s without any recorded change.",
+        "supporting": [
+          "OBS-10",
+          "OBS-12"
+        ],
+        "contradicting": [
+          "OBS-2",
+          "OBS-7",
+          "OBS-6",
+          "OBS-19",
+          "OBS-1",
+          "OBS-5",
+          "OBS-8"
+        ],
+        "assumptions": [
+          "ASM-9"
+        ],
+        "predictions": [
+          "No specific error pattern (DB auth or timeout) dominates the logs; errors appear heterogeneous",
+          "Redeploying the same code without any config change does not immediately resolve the 500s"
+        ],
+        "confidence": 0.02,
+        "version": 1,
+        "round": 2
+      },
+      "confidence": 0.02,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "Asserts a latent bug triggered by combined factors, yet no heterogeneous error pattern is observed; logs are dominated by DB auth failures.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "config on payments-service at 01:38:20 UTC by config-bot: Raise bank-rails client timeout (bank_rails.timeout_ms: 4000 -> 5000)",
+      "artifacts": [
+        "chg:2578"
+      ],
+      "service": "payments-service",
+      "id": "OBS-1",
+      "source": "change-census"
+    },
+    {
+      "statement": "secret_rotation on postgres-payments at 02:00:05 UTC by vault-rotator: Rotate database password for payments_app (secret: db/postgres-payments/payments_app, version: v31 -> v32)",
+      "artifacts": [
+        "chg:2581"
+      ],
+      "service": "postgres-payments",
+      "id": "OBS-2",
+      "source": "change-census"
+    },
+    {
+      "statement": "Bank‑rails client latency (p99) as measured by payments-service increased from a baseline of 412 ms to 489 ms at 02:35 UTC.",
+      "artifacts": [
+        "metric:payments-service/bank_rails_latency_p99_ms"
+      ],
+      "service": "payments-service",
+      "id": "OBS-5",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Payments-service DB pool in‑use dropped from 5.28 connections at 01:15 UTC to 2.0 at 02:35 UTC, well below the baseline of 5.75.",
+      "artifacts": [
+        "metric:payments-service/db_pool_in_use"
+      ],
+      "service": "payments-service",
+      "id": "OBS-6",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Starting at 02:02:05 UTC, payments-service logged 788 “FATAL: password authentication failed for user “payments_app”” errors until 02:34:53 UTC.",
+      "artifacts": [
+        "log:07bf0979f12c"
+      ],
+      "service": "payments-service",
+      "id": "OBS-7",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "From 01:34:34 UTC onward, payments-service recorded 169 HTTP 504 responses (e.g., POST /v1/withdrawals 504 88 ms).",
+      "artifacts": [
+        "log:9a103e61f521"
+      ],
+      "service": "payments-service",
+      "id": "OBS-8",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Edge‑gateway logged 196 occurrences of pattern “upstream payments-service returned 500 (route /v1/checkout)” with the first occurrence at 2026-10-13T02:03:01.213Z and the last at 2026-10-13T02:34:57.568Z.",
+      "artifacts": [
+        "log:ca1979ec42e9"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-9",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "Edge‑gateway error log pattern “GET /v1/portfolio 500 30ms” appears 22 times, first at 2026-10-13T01:53:22.545Z, indicating 500 responses were already being proxied before the checkout surge.",
+      "artifacts": [
+        "log:b93f3c05e168"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-10",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "No gateway‑side timeout, circuit‑breaker, or “upstream timeout” log lines were found in the edge‑gateway between 01:15 UTC and 02:35 UTC.",
+      "artifacts": [
+        "log:0d4fbbb98f6d"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-11",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "No log lines referencing the /v1/deposits route were present in edge‑gateway logs at WARN level or above during the same window.",
+      "artifacts": [
+        "log:ca1979ec42e9"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-12",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "payments-service configuration changed at 01:38:20 UTC, raising bank_rails.timeout_ms from 4000 to 5000 (chg:2578).",
+      "artifacts": [
+        "chg:2578"
+      ],
+      "service": "payments-service",
+      "id": "OBS-13",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "payments-service has a hard downstream dependency on bank-rails with a configured client timeout of 4000 ms (dep:payments-service->bank-rails).",
+      "artifacts": [
+        "dep:payments-service->bank-rails"
+      ],
+      "service": "payments-service",
+      "id": "OBS-15",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "postgres-payments active_connections fell from 18.36 at 01:55 UTC to 5.75 at 02:35 UTC, well below the baseline of 20.95, with the decline starting around the secret rotation time.",
+      "artifacts": [
+        "metric:postgres-payments/active_connections"
+      ],
+      "service": "postgres-payments",
+      "id": "OBS-19",
+      "source": "r2-observability-4"
+    },
+    {
+      "statement": "payments-service logged 788 “FATAL: password authentication failed for user “payments_app”” errors beginning at 2026-10-13T02:02:05 UTC and continuing until 02:34:53 UTC.",
+      "artifacts": [
+        "log:07bf0979f12c"
+      ],
+      "service": "payments-service",
+      "id": "OBS-20",
+      "source": "r2-observability-4"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "payments‑service does not reload the PostgreSQL password automatically on Vault rotation; a pod restart or SIGHUP is required.",
+      "reason": "Typical Spring/Go/Java DB clients cache the password at startup; no evidence of a reload mechanism in the codebase.",
+      "id": "ASM-5",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The payments‑service health‑check endpoint does not perform a DB query.",
+      "reason": "Health checks are reported green while DB connections are failing, implying the check skips the database.",
+      "id": "ASM-6",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "An unrecorded bank‑rails slowdown or maintenance window began around 01:30 UTC.",
+      "reason": "Withdrawal 504s appear before the timeout config change, suggesting an external degradation.",
+      "id": "ASM-7",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The timeout increase (4000→5000 ms) was a reactive change to the pre‑existing slowdown, not the cause.",
+      "reason": "Temporal ordering shows errors before the config change.",
+      "id": "ASM-8",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "A hidden code defect in payments‑service could manifest only under the combined stress of higher downstream latency and credential rotation.",
+      "reason": "No direct observation supports this; kept as a low‑probability catch‑all.",
+      "id": "ASM-9",
+      "source": "r2-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_metrics",
+      "scope": "bank-rails latency, error_rate, cpu, connection pool",
+      "reason": "Metrics for bank-rails were not fetched; needed to confirm whether downstream latency contributed.",
+      "id": "GAP-1",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "postgres-payments connection count, authentication failures, CPU, memory",
+      "reason": "Metrics for postgres-payments were not fetched; required to verify DB contention and rotation impact.",
+      "id": "GAP-2",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "payments-service ERROR logs for POST /v1/checkout and POST /v1/deposits",
+      "reason": "Only generic error patterns were returned; specific checkout/deposit failure logs are missing.",
+      "id": "GAP-3",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "payments-service logs at WARN/ERROR level for 01:15‑02:35 UTC",
+      "reason": "Not queried in this assignment; needed to confirm origin of 500s and any exception stack traces.",
+      "id": "GAP-4",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "payments-service request latency, error rate, and DB connection pool saturation for 01:15‑02:35 UTC",
+      "reason": "Metrics not fetched; would help pinpoint whether the service began failing before the gateway observed upstream 500s.",
+      "id": "GAP-5",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "bank-rails service changes (config, feature flags, infra) in the 01:00–02:35 window",
+      "reason": "Change census only covered the four listed services; bank-rails may have had an unrecorded change (e.g., maintenance window) that could affect latency.",
+      "id": "GAP-6",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_service_dependencies",
+      "scope": "Full downstream graph from payments-service (including kafka, any retry/queue layers)",
+      "reason": "Only depth‑2 downstream was retrieved; indirect dependencies (e.g., payments-service → kafka → downstream consumer) could surface additional failure paths.",
+      "id": "GAP-7",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "postgres-payments/auth_failure_total",
+      "reason": "Metric does not exist on postgres-payments; available metrics are active_connections, cpu_util, query_latency_p99_ms, replication_lag_s.",
+      "id": "GAP-8",
+      "source": "r2-observability-4"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "payments-service POST /v1/deposits ERROR",
+      "reason": "No matching ERROR‑level records returned; deposits failures may be logged at a lower level or not at all.",
+      "id": "GAP-9",
+      "source": "r2-observability-4"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "postgres-payments authentication failure logs",
+      "reason": "Postgres logs were not queried; they could contain additional evidence of failed password attempts.",
+      "id": "GAP-10",
+      "source": "r2-observability-4"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Restart all payments‑service pods (or send SIGHUP) to force them to read the new database password.",
+      "rationale": "Immediately restores successful DB connections and stops the 500 error surge.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Add automatic secret reloading (e.g., Vault Agent sidecar, filesystem watch, or periodic SIGHUP) so payments‑service picks up rotated credentials without a pod restart.",
+      "rationale": "Eliminates the window where pods run with stale credentials after each rotation.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Extend the payments‑service health check to perform a lightweight DB query, and add an alert on PostgreSQL authentication‑failure counters.",
+      "rationale": "Detects credential‑mismatch failures before they affect customers and makes future rotations visible.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Determine the cause of the 504 responses on /v1/withdrawals beginning at 01:34 UTC (OBS‑8) which are not explained by the secret rotation.",
+      "rationale": "Closes the remaining evidence gap (GAP‑1, GAP‑6) and rules out any concurrent bank‑rails issue.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Collect missing bank‑rails latency/error metrics and postgres‑payments authentication‑failure metrics for the 01:00‑02:35 UTC window.",
+      "rationale": "Fills evidence gaps GAP‑1, GAP‑2, GAP‑8 and confirms no hidden downstream degradation.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    }
+  ],
+  "open_questions": [
+    "What caused the 504 responses on /v1/withdrawals starting at 01:34 UTC (OBS‑8) if not the secret rotation?",
+    "Did bank‑rails experience any unrecorded change or maintenance that could have contributed to early latency?",
+    "Are deposit failures logged at a level lower than ERROR, and why were no ERROR‑level logs found for POST /v1/deposits (OBS‑22)?",
+    "Will the added DB‑query health check reliably surface credential mismatches for future rotations?"
+  ],
+  "termination": "the critic accepted HYP-1",
+  "stats": {
+    "rounds": 2,
+    "model_calls": 27,
+    "tool_calls": 13,
+    "tokens": 120350,
+    "elapsed_s": 1019.06
+  }
+}

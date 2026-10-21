@@ -1,0 +1,336 @@
+{
+  "incident_id": "T07",
+  "title": "Trade confirmation emails delayed",
+  "outcome": "inconclusive",
+  "outcome_reasons": [
+    "HYP-1 and HYP-2 are too close to tell apart"
+  ],
+  "summary": "At 13:12 UTC notification-service v3.9.0 was deployed, introducing a new SMTP client library that expects config key smtp.max_connections. The running configuration still contained the deprecated smtp.pool_size, causing immediate deprecation warnings, CPU saturation (up to 100%), and a consumer‑lag explosion (peak 174k messages, ~1,400× baseline). This lag translates directly into the 20‑minute+ trade‑confirmation e‑mail delays reported by customers. No upstream traffic surge or SMTP‑relay throttling can explain the magnitude of the lag.",
+  "root_cause": null,
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "code_regression",
+          "trigger": "chg:2571"
+        },
+        "mechanism": "The new SMTP client library introduced a hot path (e.g., busy‑wait on missing pool size) that consumes CPU and slows message processing, causing consumer‑lag buildup.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-4",
+          "OBS-5"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-7"
+        ],
+        "assumptions": [
+          "ASM-1"
+        ],
+        "predictions": [
+          "Thread dump would show busy‑wait loops in SMTP client code.",
+          "Rolling back to v3.8.4 restores CPU to baseline and lag to <200 msgs."
+        ],
+        "confidence": 0.78,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.78,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "config_change",
+          "trigger": "chg:2571"
+        },
+        "mechanism": "Deploy changed expected config key to smtp.max_connections but the running config still has smtp.pool_size; the library falls back to a default low‑concurrency pool, throttling outbound mail and backing up the consumer.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-4",
+          "OBS-5"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-7"
+        ],
+        "assumptions": [
+          "ASM-2"
+        ],
+        "predictions": [
+          "Adding smtp.max_connections matching old pool size eliminates CPU spike and lag.",
+          "Config inspection shows only smtp.pool_size present."
+        ],
+        "confidence": 0.65,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.65,
+      "calibration": [],
+      "confidence_band": "medium",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "Market open dramatically increases trade events on Kafka, overwhelming the consumer despite unchanged code.",
+        "supporting": [
+          "OBS-4",
+          "OBS-8"
+        ],
+        "contradicting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-3",
+          "OBS-5"
+        ],
+        "assumptions": [
+          "ASM-3"
+        ],
+        "predictions": [
+          "Kafka production metrics would show >10× message rate increase at 13:30‑13:40."
+        ],
+        "confidence": 0.2,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.2,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "notification-service",
+          "category": "infrastructure_failure",
+          "trigger": null
+        },
+        "mechanism": "External SMTP relay starts deferring mail, causing back‑pressure that stalls the consumer.",
+        "supporting": [
+          "OBS-7"
+        ],
+        "contradicting": [
+          "OBS-4",
+          "OBS-5",
+          "OBS-6"
+        ],
+        "assumptions": [
+          "ASM-4"
+        ],
+        "predictions": [
+          "SMTP relay logs would show sustained rate‑limit errors correlating with lag growth."
+        ],
+        "confidence": 0.1,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.1,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "notification-service v3.9.0 deployed at 13:12:40 UTC (switch to new SMTP client library).",
+      "artifacts": [
+        "chg:2571"
+      ],
+      "service": "notification-service",
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "From 13:13:16 UTC the service logs “config key smtp.pool_size is deprecated; use smtp.max_connections” continuously (494 occurrences).",
+      "artifacts": [
+        "log:23bad82d53ef"
+      ],
+      "service": "notification-service",
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Starting 13:40:37 UTC consumer group notify‑trades reports growing lag, reaching 67,405 messages behind at 14:14:59 UTC.",
+      "artifacts": [
+        "log:7cf4e32d00a9"
+      ],
+      "service": "notification-service",
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "consumer_lag metric jumps from baseline ~117 msgs to max 174,700, mean 60,720, last 164,500.",
+      "artifacts": [
+        "metric:notification-service/consumer_lag"
+      ],
+      "service": "notification-service",
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "CPU utilisation climbs to 1.0 (max) and averages 0.76 vs baseline 0.50.",
+      "artifacts": [
+        "metric:notification-service/cpu_util"
+      ],
+      "service": "notification-service",
+      "id": "OBS-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "Error rate stays near baseline (mean 0.0020 vs 0.00199).",
+      "artifacts": [
+        "metric:notification-service/error_rate"
+      ],
+      "service": "notification-service",
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "Only 8 “email deferred by smtp relay” warnings across the whole window.",
+      "artifacts": [
+        "log:6de115f7967d"
+      ],
+      "service": "notification-service",
+      "id": "OBS-7",
+      "source": "investigate"
+    },
+    {
+      "statement": "RPS rises modestly (mean 160 vs baseline 154).",
+      "artifacts": [
+        "metric:notification-service/rps"
+      ],
+      "service": "notification-service",
+      "id": "OBS-8",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The new SMTP client treats the deprecated smtp.pool_size as unspecified and defaults to a single connection, then busy‑waits when the pool is exhausted.",
+      "reason": "Explains immediate CPU spike and deprecation warnings after deploy.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "No separate config‑change record exists because the migration was expected to be part of the deploy; the old key remains in the live config.",
+      "reason": "Only change recorded is the deploy; config migration would not appear as a separate change.",
+      "id": "ASM-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Kafka production rate from orders-service/payments-service jumped sharply at market open.",
+      "reason": "Needed to support hypothesis that upstream surge caused lag.",
+      "id": "ASM-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "Each SMTP deferral holds a consumer thread for tens of seconds, amplifying lag.",
+      "reason": "Needed to support hypothesis that relay throttling caused back‑pressure.",
+      "id": "ASM-4",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_metrics",
+      "scope": "Kafka production metrics for trade‑confirmation topic (bytes/sec, msgs/sec) 13:00‑14:15",
+      "reason": "Not available via current tooling; needed to confirm or rule out upstream surge.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "Runtime config of notification-service (values of smtp.pool_size / smtp.max_connections)",
+      "reason": "Config values are not exposed in logs/metrics; needed to verify A2.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "Thread dump / profiling of notification-service during high‑CPU period",
+      "reason": "Would confirm busy‑wait behavior (A1).",
+      "id": "GAP-3",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "SMTP relay logs / rate‑limit counters",
+      "reason": "Would definitively rule out relay throttling (A4).",
+      "id": "GAP-4",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Roll back notification-service to v3.8.4 or deploy hot‑fix adding smtp.max_connections matching former pool size.",
+      "rationale": "Immediately restores previous CPU profile and eliminates consumer lag.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Add missing config key smtp.max_connections (value = former smtp.pool_size) to ConfigMap/secret and reload service.",
+      "rationale": "If new library is kept, correct config removes fallback that causes low concurrency.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Verify consumer_lag metric returns to baseline (<200 msgs) and CPU drops to ~0.5 after rollback/config fix.",
+      "rationale": "Confirms the fix works before closing incident.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Update deploy pipeline to include a config‑migration step for any library that changes config keys; add pre‑deploy validation logging effective SMTP pool size.",
+      "rationale": "Prevents recurrence of deploy‑only‑code changes leaving stale config.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add alerts on notification-service.consumer_lag >5,000 for >5 min and cpu_util >0.85 sustained.",
+      "rationale": "Provides early warning for similar regressions.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "What was the numeric value of smtp.pool_size in the live config?",
+    "Did the trade‑event Kafka topic see a genuine spike at market open?",
+    "Does the new SMTP client spin in a tight loop when the pool is exhausted, or does it block efficiently?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 6,
+    "tool_calls": 4,
+    "tokens": 33483,
+    "elapsed_s": 338.04
+  }
+}

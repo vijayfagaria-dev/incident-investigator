@@ -1,0 +1,452 @@
+{
+  "incident_id": "T08",
+  "title": "Deposits and checkout failing overnight",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "Deposits and checkout began failing around 02:00 UTC with a rapidly rising 5xx error rate. The investigation concluded (conclusive) that the vault secret rotation for the postgres‑payments database at 02:00:05 UTC (v31→v32) changed the DB password while payments‑service pods continued using the stale credential, producing “password authentication failed” errors that surface as 500/502 on /v1/checkout and /v1/deposits (HYP‑1, confidence 0.78). Earlier 504s on /v1/withdrawals at 01:34 remain unexplained but are not the primary cause of the later outage. The exact mechanism of credential refresh in the pods and the root cause of the early 504s are still unknown.",
+  "root_cause": {
+    "service": "postgres-payments",
+    "category": "certificate_or_credential",
+    "trigger": "chg:2581"
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "postgres-payments",
+          "category": "certificate_or_credential",
+          "trigger": "chg:2581"
+        },
+        "mechanism": "The vault secret rotation at 02:00:05 UTC changed the DB password (v31→v32). Payments‑service pods continued using the stale password for a short window, causing “password authentication failed” errors that surface as 500/502 on /v1/checkout and /v1/deposits. Edge‑gateway forwards those upstream 5xx responses.",
+        "supporting": [
+          "OBS-9",
+          "OBS-10",
+          "OBS-12",
+          "OBS-14",
+          "OBS-19",
+          "OBS-20",
+          "OBS-23"
+        ],
+        "contradicting": [
+          "OBS-8"
+        ],
+        "assumptions": [
+          "ASM-5",
+          "ASM-6"
+        ],
+        "predictions": [
+          "Payments‑service DB‑auth‑failure counter spikes sharply after 02:00 UTC",
+          "No increase in bank‑rails latency or timeout counters during the same window",
+          "Rolling restart of payments‑service pods after 02:05 UTC eliminates the 500s"
+        ],
+        "confidence": 0.78,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.78,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": "accept",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "The mechanism assumes payments‑service pods continue using the stale password until a reload/restart; no direct evidence (pod restart or credential‑refresh logs) has been shown.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "bank-rails",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "An unobserved latency spike or saturation in bank‑rails began before 01:38, pushing calls past the 4 s client timeout (hence the 504s on /v1/withdrawals at 01:34). The timeout was raised to 5 s at 01:38, but latency remained high, eventually exhausting payments‑service thread pools and turning into 500/502 on checkout and deposits.",
+        "supporting": [
+          "OBS-11",
+          "OBS-6",
+          "OBS-13",
+          "OBS-5"
+        ],
+        "contradicting": [
+          "OBS-9",
+          "OBS-10",
+          "OBS-14",
+          "OBS-23"
+        ],
+        "assumptions": [
+          "ASM-7",
+          "ASM-8"
+        ],
+        "predictions": [
+          "Bank‑rails p99 latency exceeds 4 s before 01:38 and stays above 5 s after",
+          "Payments‑service shows rising bank‑rails timeout / circuit‑breaker metrics after 01:38",
+          "DB auth‑failure counters remain flat"
+        ],
+        "confidence": 0.18,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.18,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Observations OBS‑9, OBS‑10, OBS‑14, and OBS‑23 show abundant DB authentication failures and a dropping db_pool_in_use, which directly oppose a bank‑rails latency‑driven thread‑pool exhaustion scenario.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "edge-gateway",
+          "category": "config_change",
+          "trigger": null
+        },
+        "mechanism": "An undocumented change to edge‑gateway retry/back‑off or circuit‑breaker settings amplified upstream 500s into a higher error‑rate, even though no timeout logs appear.",
+        "supporting": [
+          "OBS-16",
+          "OBS-17"
+        ],
+        "contradicting": [
+          "OBS-15",
+          "OBS-14",
+          "OBS-5"
+        ],
+        "assumptions": [
+          "ASM-4"
+        ],
+        "predictions": [
+          "Edge‑gateway config shows a recent increase in retry count or back‑off",
+          "Edge‑gateway circuit‑breaker metrics show frequent openings after 02:00"
+        ],
+        "confidence": 0.08,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.08,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "alternative_not_excluded",
+          "severity": "blocking",
+          "detail": "HYP‑1 provides a fully evidenced explanation for the 5xx responses; HYP‑3 remains viable only if HYP‑1 is ruled out, which it is not.",
+          "alternative": "HYP-1",
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "No changes (deploy, config, feature‑flag, secret, infra) recorded for bank-rails or edge-gateway between 01:00 and 02:35 UTC.",
+      "artifacts": [
+        "chg:2578",
+        "chg:2581"
+      ],
+      "service": null,
+      "id": "OBS-5",
+      "source": "r1-dependency-3"
+    },
+    {
+      "statement": "payments-service has a hard dependency on bank-rails via HTTPS with a configured timeout of 4000 ms (dep:payments-service->bank-rails).",
+      "artifacts": [
+        "dep:payments-service->bank-rails"
+      ],
+      "service": "payments-service",
+      "id": "OBS-6",
+      "source": "r1-dependency-3"
+    },
+    {
+      "statement": "The secret rotation on postgres-payments occurred at 02:00:05, after the reported failure start (~02:00), so it cannot explain the initial spike.",
+      "artifacts": [
+        "chg:2581"
+      ],
+      "service": "postgres-payments",
+      "id": "OBS-8",
+      "source": "r1-dependency-3"
+    },
+    {
+      "statement": "payments‑service logs show 788 “could not open connection to postgres‑payments: FATAL: password authentication failed for user “payments_app”” errors, first seen at 2026‑10‑13T02:02:05.222Z and last seen at 2026‑10‑13T02:34:53.178Z.",
+      "artifacts": [
+        "log:07bf0979f12c"
+      ],
+      "service": "payments-service",
+      "id": "OBS-9",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "postgres‑payments logs show 865 “FATAL: password authentication failed for user “payments_app”” errors, first seen at 2026‑10‑13T02:02:00.662Z and last seen at 2026‑10‑13T02:34:57.135Z.",
+      "artifacts": [
+        "log:94d1aef944ce"
+      ],
+      "service": "postgres-payments",
+      "id": "OBS-10",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "payments‑service logs a 504 error pattern (“POST /v1/withdrawals 504 88ms”) beginning at 2026‑10‑13T01:34:34.566Z, before the bank‑rails timeout config change at 01:38:20 UTC, and persisting through the incident.",
+      "artifacts": [
+        "log:9a103e61f521"
+      ],
+      "service": "payments-service",
+      "id": "OBS-11",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "The secret rotation for postgres‑payments (db password version v31→v32) occurred at 2026‑10‑13T02:00:05 UTC (change‑census OBS‑2).",
+      "artifacts": [
+        "chg:2581"
+      ],
+      "service": "postgres-payments",
+      "id": "OBS-12",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "The bank‑rails client timeout on payments‑service was raised from 4000 ms to 5000 ms at 2026‑10‑13T01:38:20 UTC (change‑census OBS‑1).",
+      "artifacts": [
+        "chg:2578"
+      ],
+      "service": "payments-service",
+      "id": "OBS-13",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Edge-gateway logged upstream payments-service 500 responses on route /v1/checkout starting at 2026-10-13T02:03:01Z, totaling 196 occurrences by 02:34:57Z.",
+      "artifacts": [
+        "log:ca1979ec42e9"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-14",
+      "source": "r1-observability-2"
+    },
+    {
+      "statement": "No edge-gateway log entries containing the word “timeout” were found in the 01:15–02:35 window, indicating no client‑side timeout events were recorded.",
+      "artifacts": [
+        "log:0d4fbbb98f6d"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-15",
+      "source": "r1-observability-2"
+    },
+    {
+      "statement": "Edge-gateway error_rate metric rose from 0.0034 at 01:15 to 0.0193 at 02:35 (≈10× the baseline of 0.00196).",
+      "artifacts": [
+        "metric:edge-gateway/error_rate"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-16",
+      "source": "r1-observability-2"
+    },
+    {
+      "statement": "Edge-gateway latency_p99_ms increased from a baseline of 349.5 ms to 431.7 ms at period end (peak 432.8 ms).",
+      "artifacts": [
+        "metric:edge-gateway/latency_p99_ms"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-17",
+      "source": "r1-observability-2"
+    },
+    {
+      "statement": "POST /v1/checkout 502 errors first appear at 2026-10-13T02:05:08Z and continue until 02:09:55Z (8 occurrences).",
+      "artifacts": [
+        "log:d4f8251184e5"
+      ],
+      "service": "payments-service",
+      "id": "OBS-19",
+      "source": "r2-observability-5"
+    },
+    {
+      "statement": "POST /v1/deposits 500 errors first appear at 2026-10-13T02:07:15Z and continue until 02:09:22Z (7 occurrences).",
+      "artifacts": [
+        "log:b216857f9fa5"
+      ],
+      "service": "payments-service",
+      "id": "OBS-20",
+      "source": "r2-observability-5"
+    },
+    {
+      "statement": "payments‑service db_pool_in_use dropped from 6.4 connections at 01:30 to 2.0 at 02:30 (baseline 5.94).",
+      "artifacts": [
+        "metric:payments-service/db_pool_in_use"
+      ],
+      "service": "payments-service",
+      "id": "OBS-23",
+      "source": "r2-observability-4"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "A recent, unrecorded change to edge‑gateway retry/back‑off or circuit‑breaker settings could amplify upstream errors.",
+      "reason": "Edge‑gateway error‑rate rose without timeout logs; configuration audit not captured.",
+      "id": "ASM-4",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "Payments‑service reads the DB password only at start‑up or via a periodic Vault‑agent refresh (≈30‑60 s). The rotation at 02:00:05 therefore leaves a window of stale credentials.",
+      "reason": "Typical Vault‑agent behavior; no evidence of immediate hot‑reload in the codebase.",
+      "id": "ASM-5",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The on‑call’s “failure start ~02:00” is an approximation; the first instrumented error appears at 02:02 in the logs.",
+      "reason": "Log timestamps (OBS‑9, OBS‑10) show the first authentication failures at 02:02, a couple of minutes after the secret rotation.",
+      "id": "ASM-6",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "Bank‑rails may have suffered a short‑lived latency spike not captured by the default metrics (e.g., a single‑node GC pause).",
+      "reason": "No bank‑rails metrics were retrieved for the window (GAP‑3, GAP‑4, GAP‑9).",
+      "id": "ASM-7",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "Payments‑service error handling translates any downstream timeout (bank‑rails) into a generic 500 after the timeout increase.",
+      "reason": "Observed 504s before the change and 500/502 after; plausible fallback logic.",
+      "id": "ASM-8",
+      "source": "r2-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "get_change_history",
+      "scope": "bank-rails, edge-gateway",
+      "reason": "Change census returned only two changes; any config‑map, feature‑flag, or infra work on these two services in the window is not captured.",
+      "id": "GAP-1",
+      "source": "r1-dependency-3"
+    },
+    {
+      "tool": "get_service_dependencies",
+      "scope": "bank-rails upstream dependencies",
+      "reason": "Only downstream deps from payments-service and edge-gateway were retrieved; bank-rails internal circuit‑breaker or pool settings are not visible.",
+      "id": "GAP-2",
+      "source": "r1-dependency-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "payments-service bank-rails client latency, timeout count, error rate",
+      "reason": "Metrics not queried; needed to confirm whether the 01:38 timeout increase correlates with any change in bank‑rails call performance.",
+      "id": "GAP-3",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "bank-rails request latency, error rate, saturation (CPU, connections)",
+      "reason": "No metrics retrieved; bank‑rails logs show no errors, but latency or saturation could cause upstream 504s.",
+      "id": "GAP-4",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "payments-service DEBUG/INFO logs for bank‑rails client (e.g., retry, timeout messages)",
+      "reason": "Only WARN+ patterns were fetched; lower‑level logs may contain explicit timeout or circuit‑breaker events.",
+      "id": "GAP-5",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "edge-gateway retry/timeout configuration or explicit retry log lines",
+      "reason": "Log search for “timeout” returned zero patterns; retry logic would not appear unless explicitly logged. Configuration audit not captured by current tooling.",
+      "id": "GAP-6",
+      "source": "r1-observability-2"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "payments-service error/exception logs for the same window",
+      "reason": "Payments-service logs were not queried; needed to confirm upstream failure cause.",
+      "id": "GAP-7",
+      "source": "r1-observability-2"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "payments-service error_rate (and endpoint‑level error rates) for 01:55‑02:10 UTC",
+      "reason": "Metric endpoint not queried; only log patterns available, so exact per‑minute error rates cannot be plotted.",
+      "id": "GAP-8",
+      "source": "r2-observability-5"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "bank-rails p99 latency, error_rate, cpu_util, connection‑pool metrics",
+      "reason": "No metric series were returned for bank-rails in the requested window.",
+      "id": "GAP-9",
+      "source": "r2-observability-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "payments-service bank_rails_client_timeout_count and circuit_breaker_open_close events",
+      "reason": "These custom metrics are not present in the available metric list for payments-service.",
+      "id": "GAP-10",
+      "source": "r2-observability-4"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Roll back the postgres‑payments password to version v31 or restart all payments‑service pods so they pick up the new secret (v32).",
+      "rationale": "Immediately restores DB connectivity and stops the 5xx flood on checkout and deposits.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Configure payments‑service (or its deployment) to automatically reload database credentials on secret rotation, e.g., via a Vault Agent sidecar or a reload‑on‑signal mechanism.",
+      "rationale": "Eliminates the window where pods run with a stale password after future rotations.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add a health‑check that validates DB authentication (not just liveness) and alert on authentication‑failure spikes; enforce automated pod restart on secret‑change events.",
+      "rationale": "Detects and self‑heals credential‑mismatch incidents before they impact customers.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Determine why payments‑service pods did not refresh the DB password after the vault rotation (review pod spec, Vault Agent config, and any credential‑caching logic).",
+      "rationale": "Closes the evidence gap about the stale‑credential window (critic objection).",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Analyse the early 504 errors on POST /v1/withdrawals starting at 01:34 (before the secret rotation) to establish whether a bank‑rails latency spike or other dependency issue occurred.",
+      "rationale": "Addresses the unexplained pre‑incident symptom and rules out a concurrent bank‑rails degradation (HYP‑2).",
+      "hypothesis_id": "HYP-2",
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Do payments‑service pods automatically reload the rotated database secret, or is a restart required?",
+    "What caused the 504 errors on /v1/withdrawals at 01:34 UTC, prior to the secret rotation?",
+    "Were there any unrecorded configuration or infrastructure changes on bank‑rails or edge‑gateway in the 01:00‑02:35 window?",
+    "What are the exact bank‑rails latency, timeout, and circuit‑breaker metrics during the incident window?"
+  ],
+  "termination": "the critic accepted HYP-1",
+  "stats": {
+    "rounds": 2,
+    "model_calls": 31,
+    "tool_calls": 16,
+    "tokens": 135212,
+    "elapsed_s": 947.83
+  }
+}

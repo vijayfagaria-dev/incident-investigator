@@ -1,0 +1,644 @@
+{
+  "incident_id": "T06",
+  "title": "Intermittent errors across the app",
+  "outcome": "inconclusive",
+  "outcome_reasons": [
+    "HYP-1 has unresolved blocking objections"
+  ],
+  "summary": "Starting around 11:15 UTC customers saw intermittent 2 % request failures on many screens; retries usually succeeded. The only change in the window was the orders‑service v2.16.0 deploy at 11:05, which introduced batch fee‑schedule lookups and coincides with DB‑connection‑reset warnings and a modest rise in orders‑service error rate. However, orders‑service latency did not increase, edge‑gateway timeouts were observed only to portfolio‑service, and a brief market‑data‑service degradation (HYP‑2) has not been ruled out. Because the blocking objections on HYP‑1 remain unresolved and the investigation hit its time budget, the root cause is inconclusive.",
+  "root_cause": null,
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "orders-service",
+          "category": "code_regression",
+          "trigger": "chg:2561"
+        },
+        "mechanism": "The v2.16.0 deploy introduced batch fee‑schedule lookups that open or hold additional DB connections / longer transactions on postgres‑orders. This caused peer‑reset warnings, a modest rise in orders‑service error rate, and higher DB‑pool usage. Because edge‑gateway has a hard 3 s HTTP dependency on orders‑service, the latency spikes surface as upstream connect‑timeout errors (observed on the portfolio route) and a ~2 % error‑rate increase across portfolio, orders and payments screens.",
+        "supporting": [
+          "OBS-1",
+          "OBS-7",
+          "OBS-8",
+          "OBS-14",
+          "OBS-15",
+          "OBS-16",
+          "OBS-17",
+          "OBS-18",
+          "OBS-9",
+          "OBS-10",
+          "OBS-26",
+          "OBS-34"
+        ],
+        "contradicting": [
+          "OBS-19",
+          "OBS-27",
+          "OBS-24",
+          "OBS-25",
+          "OBS-30"
+        ],
+        "assumptions": [
+          "ASM-5",
+          "ASM-6"
+        ],
+        "predictions": [
+          "Edge‑gateway per‑upstream metrics will show a spike in orders‑service timeouts/5xx at ~11:15 UTC.",
+          "Postgres‑orders logs will show a surge of “connection reset by peer” errors at the same time.",
+          "The commit diff (8b20f4e) will reveal a new bulk‑read loop or retry logic around fee‑schedule lookups."
+        ],
+        "confidence": 0.55,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.5,
+      "calibration": [
+        "it has unresolved blocking objections"
+      ],
+      "confidence_band": "medium",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "The hypothesis asserts that orders‑service latency spikes generate edge‑gateway upstream connect‑timeouts to portfolio‑service, but edge‑gateway logs only show timeouts to portfolio‑service and orders‑service latency_p99 is unchanged (OBS‑19).",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Orders‑service latency_p99 remains at baseline (OBS‑19) while the hypothesis requires a latency spike to explain the 3 s gateway timeout.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "alternative_not_excluded",
+          "severity": "blocking",
+          "detail": "HYP‑2 (market‑data‑service degradation) also explains the portfolio‑service gRPC failures and gateway timeouts and has not been ruled out.",
+          "alternative": "HYP-2",
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "A brief, un‑instrumented degradation (e.g., GC pause, thread‑pool exhaustion, transient resource saturation) in market‑data‑service caused gRPC UNAVAILABLE / connection‑reset errors. Portfolio‑service, which has a hard gRPC dependency on market‑data‑service, logged those failures at 11:15:13, and edge‑gateway subsequently recorded connect‑timeouts to portfolio‑service.",
+        "supporting": [
+          "OBS-5",
+          "OBS-23",
+          "OBS-2",
+          "OBS-20",
+          "OBS-28",
+          "OBS-29"
+        ],
+        "contradicting": [
+          "OBS-12",
+          "OBS-27",
+          "OBS-30",
+          "OBS-24",
+          "OBS-25"
+        ],
+        "assumptions": [
+          "ASM-7"
+        ],
+        "predictions": [
+          "Market‑data‑service metrics will show a spike in error_rate or latency_p99 at ~11:15 UTC.",
+          "Market‑data‑service WARN/ERROR logs will contain UNAVAILABLE or connection‑reset entries at the same moment.",
+          "No corresponding spike will be seen in other unrelated services."
+        ],
+        "confidence": 0.2,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.2,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "gap_unaddressed",
+          "severity": "blocking",
+          "detail": "Market‑data‑service WARN/ERROR logs for 11:10‑11:50 have not been queried (GAP‑13) and vendor error‑rate metrics are missing (GAP‑14); without them we cannot confirm a brief degradation.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "unsupported_claim",
+          "severity": "minor",
+          "detail": "Market‑data‑service error_rate rises only to ~0.004 (OBS‑29) and latency_p99 stays normal (OBS‑30), which may be insufficient to cause the observed 174 gRPC failures.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "HYP‑1 (orders‑service regression) also fits the timing and has supporting DB‑reset warnings; it has not been excluded. (not blocking: this review rejected HYP-1 or found it flawed)",
+          "alternative": "HYP-1",
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "infrastructure",
+          "category": "infrastructure_failure",
+          "trigger": null
+        },
+        "mechanism": "A fleeting network partition or host‑level outage affected the subnet hosting portfolio‑service and market‑data‑service simultaneously. This would generate connect‑timeout errors from edge‑gateway to portfolio‑service and gRPC UNAVAILABLE errors from portfolio‑service to market‑data‑service, while leaving other services on different subnets untouched.",
+        "supporting": [
+          "OBS-2",
+          "OBS-20",
+          "OBS-28",
+          "OBS-5",
+          "OBS-23"
+        ],
+        "contradicting": [
+          "OBS-12",
+          "OBS-27",
+          "OBS-24",
+          "OBS-25"
+        ],
+        "assumptions": [
+          "ASM-8"
+        ],
+        "predictions": [
+          "Network/AZ monitoring will show packet loss, latency spike, or health‑check failures for the portfolio‑service and market‑data‑service hosts at ~11:15 UTC.",
+          "Health‑check endpoints for those two services will report failures concurrently, while other services remain healthy."
+        ],
+        "confidence": 0.1,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.1,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "Network/AZ health metrics, packet‑loss or host‑level outage data are not exposed by the current observability tools, so the infrastructure‑failure claim cannot be verified.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "Both HYP‑1 and HYP‑2 provide concrete service‑level evidence for the error bursts and remain viable alternatives. (not blocking: this review rejected HYP-1 or found it flawed)",
+          "alternative": "HYP-1",
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "deploy on orders-service at 11:05:12 UTC by ci/deploy-bot: orders-service v2.16.0: batch fee schedule lookups (version: 2.16.0, previous_version: 2.15.2, commit: 8b20f4e, diff: +142 / -97)",
+      "artifacts": [
+        "chg:2561"
+      ],
+      "service": "orders-service",
+      "id": "OBS-1",
+      "source": "change-census"
+    },
+    {
+      "statement": "edge‑gateway logged 1 443 upstream connect‑timeout errors to portfolio‑service starting 2026‑10‑10 11:15:01 UTC (last at 11:49:59).",
+      "artifacts": [
+        "log:80f1f968cbad"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-2",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "portfolio‑service reported 174 gRPC failures to market‑data‑service (UNAVAILABLE, connection reset) beginning 2026‑10‑10 11:15:13 UTC.",
+      "artifacts": [
+        "log:e0364bef1b6f"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-5",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Only one change recorded in the window for any service on the failing call‑path: orders‑service deploy v2.16.0 at 11:05:12 UTC (batch fee schedule lookups, +142/‑97 lines).",
+      "artifacts": [
+        "chg:2561"
+      ],
+      "service": "orders-service",
+      "id": "OBS-7",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "The deploy occurred ~10 minutes before the first reported intermittent errors (~11:15 UTC), making it temporally plausible as a cause.",
+      "artifacts": [
+        "chg:2561"
+      ],
+      "service": "orders-service",
+      "id": "OBS-8",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "edge‑gateway → orders‑service is a hard HTTP dependency (timeout 3 s); failures or latency spikes in orders‑service will surface as 5xx/timeout errors on edge‑gateway routes that call orders‑service (portfolio, orders, payments screens).",
+      "artifacts": [
+        "dep:edge-gateway->orders-service"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-9",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "orders‑service has hard downstream dependencies on market‑data‑service (gRPC, 500 ms) and postgres‑orders (SQL, 2 s); a regression in the new batch lookup could increase load or latency on these services.",
+      "artifacts": [
+        "dep:orders-service->market-data-service",
+        "dep:orders-service->postgres-orders"
+      ],
+      "service": "orders-service",
+      "id": "OBS-10",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "No config changes, feature‑flag flips, secret rotations, or infra work were recorded for any other service on the call‑path (auth‑service, market‑data‑service, portfolio‑service, payments‑service, redis‑cache, postgres‑orders, postgres‑payments, quotes‑vendor, bank‑rails, kafka) during the window.",
+      "artifacts": [
+        "chg:2561"
+      ],
+      "service": null,
+      "id": "OBS-12",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "The deploy diff mentions “batch fee schedule lookups”, suggesting a code path that now aggregates multiple fee‑schedule reads, potentially increasing DB/redis load or introducing a new retry loop that could fail intermittently.",
+      "artifacts": [
+        "chg:2561"
+      ],
+      "service": "orders-service",
+      "id": "OBS-14",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "orders-service v2.16.0 deployed at 2026-10-10T11:05:12Z",
+      "artifacts": [
+        "chg:2561"
+      ],
+      "service": "orders-service",
+      "id": "OBS-15",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "Fee cache cold warnings start at 11:06:22Z and continue until 11:18:41Z (36 occurrences)",
+      "artifacts": [
+        "log:e91658633ca4"
+      ],
+      "service": "orders-service",
+      "id": "OBS-16",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "DB connection reset warnings start at 11:15:13.977Z and persist to 11:49:45.782Z (203 occurrences)",
+      "artifacts": [
+        "log:a32c4ff0bfc1"
+      ],
+      "service": "orders-service",
+      "id": "OBS-17",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "orders-service error_rate rises from baseline 0.0018 to period mean 0.0045 (max 0.0126)",
+      "artifacts": [
+        "metric:orders-service/error_rate"
+      ],
+      "service": "orders-service",
+      "id": "OBS-18",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "orders-service latency_p99 stays near baseline (256 ms → 260 ms)",
+      "artifacts": [
+        "metric:orders-service/latency_p99_ms"
+      ],
+      "service": "orders-service",
+      "id": "OBS-19",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "edge-gateway upstream timeout errors to portfolio-service start at 11:15:01.636Z (1,443 occurrences)",
+      "artifacts": [
+        "log:80f1f968cbad"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-20",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "portfolio-service gRPC failures to market-data-service start at 11:15:13.445Z (174 occurrences)",
+      "artifacts": [
+        "log:e0364bef1b6f"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-23",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "portfolio-service error_rate unchanged (baseline 0.0021 → period 0.0020)",
+      "artifacts": [
+        "metric:portfolio-service/error_rate"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-24",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "portfolio-service latency_p99 essentially flat (416 ms → 417 ms)",
+      "artifacts": [
+        "metric:portfolio-service/latency_p99_ms"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-25",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "orders-service DB pool usage modestly higher (baseline 16.4 → 17.0 connections, max 40)",
+      "artifacts": [
+        "metric:orders-service/db_pool_in_use"
+      ],
+      "service": "orders-service",
+      "id": "OBS-26",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "CPU and memory utilization for all three services remain within normal ranges",
+      "artifacts": [
+        "metric:orders-service/cpu_util",
+        "metric:orders-service/mem_util",
+        "metric:edge-gateway/cpu_util",
+        "metric:edge-gateway/mem_util",
+        "metric:portfolio-service/cpu_util",
+        "metric:portfolio-service/mem_util"
+      ],
+      "service": null,
+      "id": "OBS-27",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "edge‑gateway logged 1,443 upstream connect‑timeout errors to portfolio‑service starting 2026‑10‑10 11:15:01 UTC (last at 11:49:59 UTC).",
+      "artifacts": [
+        "log:80f1f968cbad"
+      ],
+      "service": "edge-gateway",
+      "id": "OBS-28",
+      "source": "r1-observability-4"
+    },
+    {
+      "statement": "market-data-service error_rate baseline mean 0.001827; maximum observed 0.00393 (point 0.003525 at 11:26 UTC) during 11:10‑11:50 UTC.",
+      "artifacts": [
+        "metric:market-data-service/error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-29",
+      "source": "r2-observability-6"
+    },
+    {
+      "statement": "market-data-service latency_p99_ms baseline mean 250.3 ms; maximum observed 312.9 ms, period mean 259.6 ms, staying within normal range.",
+      "artifacts": [
+        "metric:market-data-service/latency_p99_ms"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-30",
+      "source": "r2-observability-6"
+    },
+    {
+      "statement": "postgres‑orders logged three WARN events “checkpoints are occurring too frequently (<seconds> seconds apart)” at 11:10:17, 11:25:?? and 11:40:16 UTC (total 3 occurrences).",
+      "artifacts": [
+        "log:d71caa8bcd57"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-34",
+      "source": "r2-observability-5"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The new batch‑lookup code in orders‑service v2.16.0 opens or holds more DB connections or runs longer transactions, causing peer‑reset warnings on postgres‑orders.",
+      "reason": "Supported by fee‑cache‑cold warnings (OBS‑16) and DB‑connection‑reset warnings (OBS‑17) appearing shortly after the deploy, plus increased DB‑pool usage (OBS‑26) and postgres checkpoint warnings (OBS‑34).",
+      "id": "ASM-5",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The edge‑gateway “upstream connect‑timeout to portfolio‑service” is a downstream manifestation of orders‑service latency (e.g., portfolio‑service calls orders‑service for fee data, or the gateway’s portfolio route also fans‑out to orders‑service).",
+      "reason": "Edge‑gateway has a hard dependency on orders‑service (OBS‑9); portfolio‑service error‑rate and latency stay flat (OBS‑24, OBS‑25), suggesting the timeout originates upstream of portfolio‑service.",
+      "id": "ASM-6",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "A short‑lived internal event (GC pause, thread‑pool stall, brief saturation) occurred in market‑data‑service around 11:15 UTC but is not captured by the coarse‑grained metrics we have.",
+      "reason": "Only a tiny error‑rate blip at 11:26 (OBS‑29) is visible; latency remains normal (OBS‑30). No logs or fine‑grained metrics were retrieved (GAP‑8, GAP‑13).",
+      "id": "ASM-7",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "A network or AZ event affected the subnet hosting portfolio‑service and market‑data‑service simultaneously, invisible to service‑level metrics.",
+      "reason": "Both services show simultaneous timeout signatures (OBS‑2, OBS‑5) while CPU/memory for all services stay normal (OBS‑27). No infrastructure change records exist (OBS‑12).",
+      "id": "ASM-8",
+      "source": "r2-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_metrics",
+      "scope": "market-data-service, orders-service, payments-service, auth-service, postgres-orders, postgres-payments, quotes-vendor, bank-rails",
+      "reason": "No metrics were retrieved for these services; cannot assess their health or saturation during the incident.",
+      "id": "GAP-1",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "market-data-service, orders-service, payments-service, auth-service, postgres-orders, postgres-payments, quotes-vendor, bank-rails",
+      "reason": "No WARN/ERROR log patterns were fetched for these services; possible upstream failures are invisible.",
+      "id": "GAP-2",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "edge-gateway per‑upstream latency/error breakdown",
+      "reason": "Edge‑gateway metrics only provide aggregate error_rate and latency; we cannot attribute the spike to a specific upstream without per‑target series.",
+      "id": "GAP-3",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Feature‑flag or config toggles on any service in the window",
+      "reason": "Change history only returns deploys; a flag flip enabling the new batch‑lookup path would not appear as a deploy.",
+      "id": "GAP-4",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Secret rotations or infra maintenance for redis‑cache, postgres‑orders, postgres‑payments, kafka, quotes‑vendor, bank‑rails",
+      "reason": "No records were returned for these operations; a brief rotation or restart could cause transient errors.",
+      "id": "GAP-5",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "Detailed diff of orders‑service commit 8b20f4e",
+      "reason": "Only a line‑count diff (+142/‑97) is available; without the exact code change we cannot confirm new retry loops, bulk reads, or circuit‑breaker modifications.",
+      "id": "GAP-6",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "client‑side telemetry (browser/mobile)",
+      "scope": "End‑user error and retry behavior",
+      "reason": "Responder hypothesised a client‑side issue; lack of client telemetry prevents ruling that out.",
+      "id": "GAP-7",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "market-data-service logs (WARN+)",
+      "reason": "Not queried; needed to see if market-data-service emitted errors or resets at 11:15",
+      "id": "GAP-8",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "postgres-orders logs (WARN+)",
+      "reason": "Not queried; needed to confirm DB side of connection resets",
+      "id": "GAP-9",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "circuit_breaker_open_total for orders-service, edge-gateway, portfolio-service",
+      "reason": "Metrics not present in current metric list; needed to verify breaker trips",
+      "id": "GAP-10",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "edge-gateway upstream error records with upstream identifier",
+      "reason": "Current pattern only shows timeout to portfolio-service; need breakdown to see if orders-service also timed out",
+      "id": "GAP-11",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "edge‑gateway logs filtered for timeout to auth‑service, payments‑service, quotes‑vendor, bank‑rails",
+      "reason": "Step limit reached; only a generic timeout pattern query was executed, which returned a single pattern for portfolio‑service.",
+      "id": "GAP-12",
+      "source": "r1-observability-4"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "market-data-service WARN/ERROR logs 2026-10-10T11:10:00Z‑2026-10-10T11:50:00Z",
+      "reason": "Log query not executed; no log evidence available for this service in the window.",
+      "id": "GAP-13",
+      "source": "r2-observability-6"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "market-data-service vendor_error_rate 2026-10-10T11:10:00Z‑2026-10-10T11:50:00Z",
+      "reason": "Vendor error rate not examined; could reveal upstream quote‑vendor issues.",
+      "id": "GAP-14",
+      "source": "r2-observability-6"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "per‑upstream error_rate and latency_p99 for edge‑gateway upstreams (orders‑service, portfolio‑service)",
+      "reason": "The metrics endpoint only returns service‑level aggregates; upstream‑specific series are not exposed.",
+      "id": "GAP-15",
+      "source": "r2-observability-5"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "postgres‑orders checkpoint interval, write latency, or WAL throughput metrics",
+      "reason": "Only log patterns were queryable; no metric series for postgres‑orders were available in the tool.",
+      "id": "GAP-16",
+      "source": "r2-observability-5"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Roll back orders‑service to v2.15.2 (pre‑batch‑lookup) to stop the ongoing error burst.",
+      "rationale": "The deploy is the only change temporally aligned with the incident and is the primary suspect (HYP‑1). Rolling back removes the new code path immediately.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Analyze commit 8b20f4e (diff +142/‑97) for the batch fee‑schedule lookup implementation, verify DB‑connection handling, and add safeguards (e.g., connection‑pool limits, circuit‑breaker, retry back‑off).",
+      "rationale": "If the new bulk‑read logic is holding connections longer, it can cause peer‑reset warnings and downstream timeouts despite unchanged latency_p99.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Query market‑data‑service WARN/ERROR logs for 11:10‑11:50 UTC and retrieve vendor error‑rate metrics.",
+      "rationale": "Gap‑13 and Gap‑14 block confirmation of a brief market‑data degradation (HYP‑2).",
+      "hypothesis_id": "HYP-2",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Enable and collect per‑upstream error‑rate and latency_p99 metrics from edge‑gateway (orders‑service, portfolio‑service, etc.).",
+      "rationale": "Current aggregate metrics cannot attribute the timeout spike to a specific upstream (Gap‑3, Gap‑15).",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Fetch postgres‑orders logs for connection‑reset warnings and checkpoint‑frequency metrics.",
+      "rationale": "Gap‑9 and Gap‑16 are needed to verify the DB side of the peer‑reset warnings seen in orders‑service.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add client‑side telemetry (browser/mobile error/retry reporting) and enrich edge‑gateway dashboards with per‑upstream SLO alerts.",
+      "rationale": "Gap‑7 prevents ruling out client‑side issues; per‑upstream observability will make future regressions detectable faster.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Implement automated canary/rollback guard for orders‑service that triggers on error‑rate > 1 % or DB‑pool saturation.",
+      "rationale": "Provides a safety net for future deployments that introduce similar batch‑lookup patterns.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Did market‑data‑service experience a brief, uninstrumented degradation (GC pause, thread‑pool exhaustion) at ~11:15 UTC?",
+    "Do edge‑gateway per‑upstream metrics show timeouts to orders‑service as well as portfolio‑service?",
+    "What exact code changes are in commit 8b20f4e (new retry loops, bulk reads, connection‑pool usage)?",
+    "Do postgres‑orders logs confirm a surge of ‘connection reset by peer’ errors and frequent checkpoints during the window?",
+    "Is there any client‑side evidence (browser/mobile) that the errors originated before reaching edge‑gateway?"
+  ],
+  "termination": "time budget reached",
+  "stats": {
+    "rounds": 2,
+    "model_calls": 35,
+    "tool_calls": 21,
+    "tokens": 191735,
+    "elapsed_s": 1175.67
+  }
+}

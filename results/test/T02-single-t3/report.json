@@ -1,0 +1,347 @@
+{
+  "incident_id": "T02",
+  "title": "Portfolio pages slow and failing",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "At ~14:41 UTC the external quotes‑vendor began timing out (800 ms hard timeout) and returning 429s. Market‑data‑service's circuit‑breaker opened at 14:47 UTC and started serving stale quotes. Because portfolio‑service calls market‑data‑service with a 500 ms gRPC deadline, the vendor slowdown immediately produced massive DEADLINE_EXCEEDED errors (first seen 14:42 UTC) and a sharp rise in portfolio‑service latency (p99 > 3 s) and error rate (≈ 7 %). The portfolio‑service v5.4.0 deploy at 14:48 UTC added a new “sector breakdown” feature (visible as “sector mapping missing” warnings) but did not cause the latency spike – the degradation was already underway. Edge‑gateway, which fronts portfolio‑service with a 3 s timeout, consequently returned 5xx and high latency to customers, and some order placements were rejected as a downstream effect.",
+  "root_cause": {
+    "service": "market-data-service",
+    "category": "dependency_degradation",
+    "trigger": null
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "External quotes‑vendor latency and error spikes cause market‑data‑service timeouts and circuit‑breaker activation; portfolio‑service's 500 ms deadline is exceeded, generating DEADLINE_EXCEEDED errors, high latency and 5xx, which propagate to edge‑gateway and cause order rejections.",
+        "supporting": [
+          "OBS-5",
+          "OBS-6",
+          "OBS-7",
+          "OBS-8",
+          "OBS-9",
+          "OBS-10",
+          "OBS-11",
+          "OBS-12"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "If vendor latency returns to baseline, portfolio‑service latency and error_rate should drop back to baseline without any code change.",
+          "Increasing portfolio‑service gRPC deadline should reduce DEADLINE_EXCEEDED count even while vendor remains slow."
+        ],
+        "confidence": 0.92,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.92,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "portfolio-service",
+          "category": "code_regression",
+          "trigger": "chg:2512"
+        },
+        "mechanism": "New sector‑breakdown feature in v5.4.0 adds extra calls or heavier processing to market‑data‑service, amplifying latency and causing the observed spikes.",
+        "supporting": [
+          "OBS-3"
+        ],
+        "contradicting": [
+          "OBS-2",
+          "OBS-5",
+          "OBS-7",
+          "OBS-8",
+          "OBS-9",
+          "OBS-10"
+        ],
+        "assumptions": [
+          "ASM-2"
+        ],
+        "predictions": [
+          "Rolling back v5.4.0 should immediately eliminate sector‑mapping warnings and reduce portfolio‑service latency if this hypothesis were true."
+        ],
+        "confidence": 0.18,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.18,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "resource_exhaustion",
+          "trigger": null
+        },
+        "mechanism": "CPU or memory saturation in market‑data‑service slows its processing of vendor responses, leading to timeouts.",
+        "supporting": [],
+        "contradicting": [
+          "OBS-13"
+        ],
+        "assumptions": [],
+        "predictions": [
+          "CPU/memory metrics would show sustained high utilization during the incident."
+        ],
+        "confidence": 0.03,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.03,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "market-data-service",
+          "category": "config_change",
+          "trigger": null
+        },
+        "mechanism": "An undocumented configuration change (e.g., reduced timeout) in market‑data‑service caused earlier vendor timeouts.",
+        "supporting": [],
+        "contradicting": [
+          "OBS-12"
+        ],
+        "assumptions": [],
+        "predictions": [
+          "A config change entry would appear in change history for market‑data‑service."
+        ],
+        "confidence": 0.02,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.02,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "First gRPC DEADLINE_EXCEEDED from portfolio‑service → market‑data‑service (GetQuotes) at 14:42:01 UTC",
+      "artifacts": [
+        "log:3096c4afe74b"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Portfolio‑service logs “sector mapping missing” warnings appear after deploy (14:49 UTC onward)",
+      "artifacts": [
+        "log:e481388daa5a"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "Market‑data‑service logs quotes‑vendor request timed out after 800 ms (batch of symbols) from 14:41 UTC",
+      "artifacts": [
+        "log:785c94c54006"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "Market‑data‑service circuit‑breaker half‑open, serving last known quotes from 14:47 UTC",
+      "artifacts": [
+        "log:a9fa5c6b6926"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "Market‑data‑service vendor_error_rate spikes to 0.118 (baseline 0.001)",
+      "artifacts": [
+        "metric:market-data-service/vendor_error_rate"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-7",
+      "source": "investigate"
+    },
+    {
+      "statement": "Market‑data‑service vendor_latency_p99 spikes to 2 971 ms (baseline 180 ms)",
+      "artifacts": [
+        "metric:market-data-service/vendor_latency_p99_ms"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-8",
+      "source": "investigate"
+    },
+    {
+      "statement": "Market‑data‑service latency_p99 spikes to 2 399 ms (baseline 253 ms)",
+      "artifacts": [
+        "metric:market-data-service/latency_p99_ms"
+      ],
+      "service": "market-data-service",
+      "id": "OBS-9",
+      "source": "investigate"
+    },
+    {
+      "statement": "Portfolio‑service latency_p99 spikes to 3 513 ms (baseline 415 ms) and error_rate to 0.074 (baseline 0.002)",
+      "artifacts": [
+        "metric:portfolio-service/latency_p99_ms",
+        "metric:portfolio-service/error_rate"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-10",
+      "source": "investigate"
+    },
+    {
+      "statement": "Dependency graph shows portfolio‑service → market‑data‑service (hard, 500 ms) and market‑data‑service → quotes‑vendor (hard, 800 ms)",
+      "artifacts": [
+        "dep:portfolio-service->market-data-service",
+        "dep:market-data-service->quotes-vendor"
+      ],
+      "service": null,
+      "id": "OBS-11",
+      "source": "investigate"
+    },
+    {
+      "statement": "No config, feature‑flag, secret‑rotation or infra changes for involved services in the 45 min window (only portfolio‑service deploy)",
+      "artifacts": [
+        "chg:2512"
+      ],
+      "service": null,
+      "id": "OBS-12",
+      "source": "investigate"
+    },
+    {
+      "statement": "CPU and memory of portfolio‑service and market‑data‑service remain near baseline (~0.5 ratio), indicating no resource exhaustion",
+      "artifacts": [
+        "metric:portfolio-service/cpu_util",
+        "metric:portfolio-service/mem_util",
+        "metric:market-data-service/cpu_util",
+        "metric:market-data-service/mem_util"
+      ],
+      "service": null,
+      "id": "OBS-13",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The 800 ms hard timeout on market‑data‑service → quotes‑vendor call is enforced exactly as shown in the dependency graph.",
+      "reason": "Dependency graph defines hard timeout; no evidence of override.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "Portfolio‑service’s 500 ms gRPC timeout to market‑data‑service is lower than the vendor latency observed, so any vendor slowdown > 500 ms produces the DEADLINE_EXCEEDED errors.",
+      "reason": "Timeout values from dependency graph; vendor latency > 500 ms per metrics.",
+      "id": "ASM-2",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_logs",
+      "scope": "edge-gateway",
+      "reason": "Edge‑gateway logs/metrics not collected; needed to confirm exact error propagation and timeout behavior.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "quotes-vendor",
+      "reason": "No vendor‑side telemetry available; cannot verify root cause on vendor side.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "distributed traces",
+      "reason": "Traces not available; would pinpoint call‑stack latency breakdown.",
+      "id": "GAP-3",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "postgres-orders",
+      "reason": "Responder claimed Postgres normal but no metric evidence gathered.",
+      "id": "GAP-4",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Engage quotes‑vendor on‑call to investigate and resolve latency/429 spikes; request SLA adherence.",
+      "rationale": "Directly addresses the upstream dependency degradation (Hypothesis H1).",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Increase market‑data‑service → vendor timeout or add retry/back‑off logic; optionally raise portfolio‑service gRPC deadline to 1 s.",
+      "rationale": "Reduces immediate DEADLINE_EXCEEDED errors while vendor issue is resolved.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "fix",
+      "description": "Deploy hot‑fix to portfolio‑service to fall back to cached quotes when market‑data‑service latency exceeds threshold.",
+      "rationale": "Improves resilience to future vendor degradations.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add vendor‑latency SLO monitoring and alerting (vendor_error_rate, vendor_latency_p99); align timeout chain (500 ms → 800 ms) and document.",
+      "rationale": "Early detection and prevents cascading failures.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Review portfolio‑service v5.4.0 sector‑breakdown code for unnecessary extra market‑data calls; consider rollback if it adds load.",
+      "rationale": "Ensures new feature does not amplify future incidents.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "What caused the quotes‑vendor latency spike? (Network, throttling, vendor deploy?)",
+    "Does the new sector‑breakdown logic in v5.4.0 issue additional market‑data calls per request?",
+    "Were any edge‑gateway instances saturated (thread‑pool, connection pool) contributing to 5xx beyond upstream latency?",
+    "Is the Postgres‑orders path truly healthy, or could it become a secondary bottleneck once market‑data recovers?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 8,
+    "tool_calls": 6,
+    "tokens": 51761,
+    "elapsed_s": 267.07
+  }
+}

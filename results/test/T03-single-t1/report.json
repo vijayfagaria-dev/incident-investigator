@@ -1,0 +1,456 @@
+{
+  "incident_id": "T03",
+  "title": "Portfolio and order pages slow, users logged out",
+  "outcome": "inconclusive",
+  "outcome_reasons": [
+    "the leading hypothesis has confidence 0.35, below 0.5",
+    "HYP-1 and HYP-2 are too close to tell apart"
+  ],
+  "summary": "Around 10:12‑10:14 UTC the postgres‑orders database saturated (CPU ~100%, connections >2× baseline, query latency >60×). The dominant workload was a simple SELECT on positions executed >1k times per minute. This caused portfolio‑service timeouts and p99 latency >2.5 s, and auth‑service session loss because its Redis cache became unavailable. A config reload at 09:31:44 that doubled work_mem (chg:2519) may have contributed, but a sudden surge of concurrent reads, a missing index, or a Redis degradation are also plausible. Evidence is insufficient to single out one root cause.",
+  "root_cause": null,
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "postgres-orders",
+          "category": "config_change",
+          "trigger": "chg:2519"
+        },
+        "mechanism": "Increasing work_mem doubled per‑query memory allocation; with many concurrent executions the instance ran out of memory, causing CPU thrashing, connection‑slot exhaustion and query timeouts.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-7"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-8",
+          "OBS-9",
+          "OBS-10",
+          "OBS-11"
+        ],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "Reverting work_mem to 4 MB should reduce CPU and connection pressure quickly.",
+          "pg_stat_statements will show high memory‑grant usage for the positions query."
+        ],
+        "confidence": 0.35,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.35,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "postgres-orders",
+          "category": "capacity_saturation",
+          "trigger": null
+        },
+        "mechanism": "An unexpected burst of concurrent SELECT * FROM positions (e.g., a batch job or feature flag) saturated CPU and connection pool, leading to timeouts and downstream latency.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-10",
+          "OBS-11"
+        ],
+        "contradicting": [
+          "OBS-7",
+          "OBS-8",
+          "OBS-9"
+        ],
+        "assumptions": [
+          "ASM-3"
+        ],
+        "predictions": [
+          "orders‑service or a scheduler will show a spike in request rate at ~10:12.",
+          "Connection count correlates with incoming request rate."
+        ],
+        "confidence": 0.3,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.3,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "postgres-orders",
+          "category": "data_issue",
+          "trigger": null
+        },
+        "mechanism": "Missing or ineffective index on positions.account_id forces full‑table scans; each scan consumes CPU and holds connections longer, producing the observed overload.",
+        "supporting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5"
+        ],
+        "contradicting": [
+          "OBS-7",
+          "OBS-6",
+          "OBS-10",
+          "OBS-11"
+        ],
+        "assumptions": [
+          "ASM-4"
+        ],
+        "predictions": [
+          "EXPLAIN ANALYZE will show a Seq Scan on positions.",
+          "Creating the index will drop query latency dramatically."
+        ],
+        "confidence": 0.25,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.25,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "redis-cache",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "Redis memory pressure or restart caused mass eviction of portfolio position caches and auth sessions; services fell back to postgres‑orders (cache miss storm) and forced re‑logins, overloading the DB.",
+        "supporting": [
+          "OBS-10",
+          "OBS-11",
+          "OBS-12",
+          "OBS-13",
+          "OBS-14"
+        ],
+        "contradicting": [
+          "OBS-1",
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-7"
+        ],
+        "assumptions": [
+          "ASM-5"
+        ],
+        "predictions": [
+          "Redis metrics will show a sharp memory‑usage drop or eviction spike at ~10:12.",
+          "Redis logs will show a restart or OOM event."
+        ],
+        "confidence": 0.2,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.2,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "postgres‑orders CPU utilisation rose from baseline 0.34 to 0.95 by 10:40 UTC, first high point ~10:14.",
+      "artifacts": [
+        "metric:postgres-orders/cpu_util"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "Active connections on postgres‑orders climbed from baseline ~73 to 175 at 10:40 UTC.",
+      "artifacts": [
+        "metric:postgres-orders/active_connections"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Query latency p99 on postgres‑orders jumped from baseline ~18 ms to 1067 ms by 10:40 UTC, first rise ~10:14.",
+      "artifacts": [
+        "metric:postgres-orders/query_latency_p99_ms"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "Postgres log shows 1050 executions of ‘SELECT * FROM positions WHERE account_id = $1’ between 10:14:01 and 10:39:59.",
+      "artifacts": [
+        "log:d9900d4bc11e"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "Postgres log reports 302 ‘FATAL: remaining connection slots are reserved for non‑replication superuser connections’ errors starting 10:16:25.",
+      "artifacts": [
+        "log:e1265c62e747"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-5",
+      "source": "investigate"
+    },
+    {
+      "statement": "Checkpoint frequency warnings appeared at 09:33 and 10:25.",
+      "artifacts": [
+        "log:5dc98c9be4d4"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "Config change chg:2519 at 09:31:44 raised work_mem from 4 MB to 8 MB (reload).",
+      "artifacts": [
+        "chg:2519"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-7",
+      "source": "investigate"
+    },
+    {
+      "statement": "portfolio‑service latency p99 rose from baseline 424 ms to 2780 ms at 10:40 UTC, first rise ~10:13.",
+      "artifacts": [
+        "metric:portfolio-service/latency_p99_ms"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-8",
+      "source": "investigate"
+    },
+    {
+      "statement": "portfolio‑service error rate increased from baseline 0.002 to 0.048 at 10:40 UTC.",
+      "artifacts": [
+        "metric:portfolio-service/error_rate"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-9",
+      "source": "investigate"
+    },
+    {
+      "statement": "Portfolio logs show 1604 cache‑misses for positions loading from postgres‑orders starting 10:13:01.",
+      "artifacts": [
+        "log:4c3c36a1bb07"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-10",
+      "source": "investigate"
+    },
+    {
+      "statement": "Portfolio logs show 496 query‑timeout errors (2000 ms) to postgres‑orders starting 10:16:01.",
+      "artifacts": [
+        "log:1b4046047da5"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-11",
+      "source": "investigate"
+    },
+    {
+      "statement": "auth‑service logs 665 ‘session not found in redis; forcing re‑login’ events starting 10:12:36.",
+      "artifacts": [
+        "log:26d7a4550ba6"
+      ],
+      "service": "auth-service",
+      "id": "OBS-12",
+      "source": "investigate"
+    },
+    {
+      "statement": "Dependency graph: auth‑service → redis‑cache (hard, 200 ms).",
+      "artifacts": [
+        "dep:auth-service->redis-cache"
+      ],
+      "service": "auth-service",
+      "id": "OBS-13",
+      "source": "investigate"
+    },
+    {
+      "statement": "Dependency graph: portfolio‑service → postgres‑orders (hard, 2000 ms) and → redis‑cache (soft, 100 ms).",
+      "artifacts": [
+        "dep:portfolio-service->postgres-orders",
+        "dep:portfolio-service->redis-cache"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-14",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The work_mem reload took effect immediately and remained at 8 MB for the incident window.",
+      "reason": "Config change was a reload; no further changes recorded.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "The dominant SELECT on positions uses work_mem (e.g., large sorts or hash aggregates).",
+      "reason": "Higher work_mem only impacts operators that allocate memory.",
+      "id": "ASM-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "A surge of concurrent positions reads originated upstream (batch job or feature flag) not captured in change history.",
+      "reason": "No deploy or config change on callers observed; connection count rose sharply.",
+      "id": "ASM-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "Planner may have chosen a sequential scan on positions because statistics were stale or table grew past a threshold.",
+      "reason": "Missing index would cause full scans; no schema change recorded.",
+      "id": "ASM-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "Redis cache experienced memory pressure or a brief restart around 10:12, causing evictions and session loss.",
+      "reason": "Simultaneous cache‑miss storm in portfolio and session loss in auth point to a common Redis issue, but no Redis telemetry was collected.",
+      "id": "ASM-5",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_metrics",
+      "scope": "redis-cache CPU, memory, eviction rate, uptime 09:30‑10:40",
+      "reason": "Redis telemetry not queried; needed to confirm or reject H4.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "redis-cache logs 09:30‑10:40",
+      "reason": "No Redis logs retrieved; would show restarts or OOM.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "orders-service request rate, error rate, latency 09:30‑10:40",
+      "reason": "Upstream traffic burst (H2) not observed.",
+      "id": "GAP-3",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "orders-service logs 09:30‑10:40",
+      "reason": "Could reveal batch job or feature‑flag activation.",
+      "id": "GAP-4",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "postgres-orders EXPLAIN ANALYZE for the positions query",
+      "reason": "Plan details missing; needed to test H1 vs H3.",
+      "id": "GAP-5",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "investigate",
+      "description": "Collect Redis metrics (memory, evictions, uptime) and logs for 09:30‑10:40.",
+      "rationale": "Directly tests hypothesis H4 (Redis degradation).",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Run EXPLAIN (ANALYZE, BUFFERS) for SELECT * FROM positions WHERE account_id = $1 on a replica.",
+      "rationale": "Determines index usage and memory‑grant behavior (H1 vs H3).",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Revert work_mem to 4 MB via ALTER SYSTEM SET work_mem='4MB'; SELECT pg_reload_conf();",
+      "rationale": "If config change (H1) is contributing, this reduces per‑query memory pressure quickly.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "investigate",
+      "description": "Enable pg_stat_statements snapshot for last 30 min and capture top‑SQL.",
+      "rationale": "Quantifies query load to validate capacity‑saturation (H2) or missing index (H3).",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Review orders‑service request rate and any scheduled batch jobs around 10:12.",
+      "rationale": "Checks for upstream traffic surge (H2).",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "fix",
+      "description": "If index missing, create CREATE INDEX ON positions(account_id); if connection slots exhausted, raise max_connections temporarily.",
+      "rationale": "Addresses H3 and connection‑slot exhaustion.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add alerts on postgres‑orders CPU >80% and active_connections >150; add Redis memory‑eviction alert.",
+      "rationale": "Early detection for similar overload patterns.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Update change‑management policy for memory‑related GUCs (work_mem) to require canary rollout and post‑change monitoring.",
+      "rationale": "Mitigates future config‑change induced saturation (H1).",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Validate read‑replica fail‑over readiness for postgres‑orders.",
+      "rationale": "Responder asked about fail‑over; improves resilience.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Did Redis experience a restart or OOM around 10:12?",
+    "What was the exact request rate on orders‑service at the onset?",
+    "Does the positions table have an index on account_id, and are statistics up to date?",
+    "Was any feature flag or batch job enabled at 10:10‑10:15 that could cause the query surge?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 9,
+    "tool_calls": 7,
+    "tokens": 60984,
+    "elapsed_s": 279.07
+  }
+}

@@ -1,0 +1,766 @@
+{
+  "incident_id": "T03",
+  "title": "Portfolio and order pages slow, users logged out",
+  "outcome": "inconclusive",
+  "outcome_reasons": [
+    "HYP-4 and HYP-2 are too close to tell apart"
+  ],
+  "summary": "Starting around 10:13 UTC the portfolio and order pages became very slow (p99 > 2.5 s) and many users were forced to log in again. Postgres‑orders CPU hit ~100 % and its active connections and query latency spiked sharply at 10:12 UTC. Two leading explanations remain indistinguishable: (1) a new heavy‑query workload amplified by the work_mem increase (HYP‑4, confidence 0.55) and (2) a Redis master failure that lost session keys and caused the logout wave (HYP‑2, confidence 0.50). The investigation was stopped because the time budget was exhausted, leaving the exact trigger and the relative contribution of each factor unknown.",
+  "root_cause": null,
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "postgres-orders",
+          "category": "capacity_saturation",
+          "trigger": null
+        },
+        "mechanism": "At ~10:12 UTC a new query pattern (e.g., a scheduled reporting job, a feature‑flag‑enabled batch, or a sudden traffic spike) began issuing many concurrent heavy‑sort/hash queries. The higher work_mem (from chg:2519) amplified per‑query memory/CPU use, causing a rapid rise in active connections, CPU saturation and query latency. Downstream services suffer because they depend on postgres‑orders via hard SQL calls. The Redis fail‑over is a coincident but independent infrastructure event that explains the logout wave.",
+        "supporting": [
+          "OBS-20",
+          "OBS-21",
+          "OBS-22",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-6",
+          "OBS-7",
+          "OBS-8",
+          "OBS-9",
+          "OBS-15",
+          "OBS-13",
+          "OBS-14"
+        ],
+        "contradicting": [
+          "OBS-1",
+          "OBS-13",
+          "OBS-14",
+          "OBS-10",
+          "OBS-11",
+          "OBS-12",
+          "OBS-17",
+          "OBS-18",
+          "OBS-19"
+        ],
+        "assumptions": [
+          "ASM-11",
+          "ASM-12",
+          "ASM-13"
+        ],
+        "predictions": [
+          "Per‑minute metrics show a sharp inflection at 10:12 UTC for connections, CPU, and latency.",
+          "pg_stat_statements around 10:12‑10:15 UTC reveal new heavy sort/hash queries that were absent before.",
+          "Redis‑cache metrics show no pre‑failure saturation; the master loss is independent."
+        ],
+        "confidence": 0.55,
+        "version": 1,
+        "round": 2
+      },
+      "confidence": 0.55,
+      "calibration": [],
+      "confidence_band": "medium",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-4",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "Requires pg_stat_statements snapshot around 10:12‑10:15 UTC to confirm new heavy sort/hash queries; not available via current tools.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-4",
+          "kind": "alternative_not_excluded",
+          "severity": "minor",
+          "detail": "HYP‑1 still offers a possible mechanism (work_mem amplification) though its timing prediction failed; not fully excluded.",
+          "alternative": "HYP-1",
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "redis-cache",
+          "category": "infrastructure_failure",
+          "trigger": null
+        },
+        "mechanism": "The Redis master went down at 10:12:03 UTC and a replica was promoted with incomplete resync, causing loss of session keys stored in Redis. Auth‑service treats missing sessions as “session not found” and forces re‑login, generating the logout wave. The same Redis loss adds latency to services that use it as a soft cache (orders‑service, portfolio‑service), but the magnitude of their latency spikes is far larger than can be explained by cache loss alone.",
+        "supporting": [
+          "OBS-10",
+          "OBS-11",
+          "OBS-12",
+          "OBS-17",
+          "OBS-18",
+          "OBS-19"
+        ],
+        "contradicting": [
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-6",
+          "OBS-7",
+          "OBS-8",
+          "OBS-9",
+          "OBS-15"
+        ],
+        "assumptions": [
+          "ASM-2",
+          "ASM-3"
+        ],
+        "predictions": [
+          "Auth‑service error‑rate and latency should jump precisely at the first WARN (10:12:36 UTC).",
+          "Redis‑cache metrics (CPU, memory, connected_clients, keyspace_hits/misses) should show saturation or a sharp drop just before 10:12 UTC."
+        ],
+        "confidence": 0.52,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.5,
+      "calibration": [
+        "it has unresolved blocking objections"
+      ],
+      "confidence_band": "medium",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Does not explain postgres‑orders CPU ≈100%, query latency >1 s, and connection surge (OBS‑3/4/5/20/21/22) nor the downstream service latency spikes.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-2",
+          "kind": "alternative_not_excluded",
+          "severity": "blocking",
+          "detail": "HYP‑4 provides a coherent explanation for both the DB saturation and the Redis‑failover logouts; HYP‑2 has not ruled it out.",
+          "alternative": "HYP-4",
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "postgres-orders",
+          "category": "config_change",
+          "trigger": "chg:2519"
+        },
+        "mechanism": "Raising work_mem from 4 MiB to 8 MiB allows queries that perform large sorts or hashes to allocate twice as much memory. When a workload that issues such queries starts (≈10:12 UTC) the extra memory pressure appears as higher CPU, longer query latency and a spike in active connections, which then propagates over the hard‑SQL dependency to orders‑service and portfolio‑service.",
+        "supporting": [
+          "OBS-1",
+          "OBS-13",
+          "OBS-14",
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-6",
+          "OBS-7",
+          "OBS-8",
+          "OBS-9",
+          "OBS-15",
+          "OBS-16"
+        ],
+        "contradicting": [
+          "OBS-20",
+          "OBS-21",
+          "OBS-22",
+          "OBS-10",
+          "OBS-11",
+          "OBS-12",
+          "OBS-17",
+          "OBS-18",
+          "OBS-19"
+        ],
+        "assumptions": [
+          "ASM-5",
+          "ASM-6",
+          "ASM-7"
+        ],
+        "predictions": [
+          "Per‑minute postgres‑orders CPU should start rising at or shortly after 09:31 UTC.",
+          "pg_stat_statements around 10:12‑10:15 UTC will show queries with large sort/hash memory usage."
+        ],
+        "confidence": 0.48,
+        "version": 2,
+        "round": 2
+      },
+      "confidence": 0.48,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "challenge",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "temporal_violation",
+          "severity": "blocking",
+          "detail": "Prediction that CPU should rise at/after 09:31 UTC contradicts observed stability until 10:12 UTC (OBS‑20/21/22).",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-1",
+          "kind": "gap_unaddressed",
+          "severity": "minor",
+          "detail": "No per‑query CPU/memory data (pg_stat_statements) to show whether the work_mem increase amplified existing queries; tooling cannot provide this.",
+          "alternative": null,
+          "source": "critic"
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "redis-cache",
+          "category": "infrastructure_failure",
+          "trigger": "log:f58ca7278052"
+        },
+        "mechanism": "The Redis master was marked down at 10:12:03 UTC, a replica was promoted with incomplete resync, and the master switch completed at 10:12:37 UTC. Session keys stored only on the lost master disappear; auth‑service therefore logs “session not found” and forces re‑login. Services that use Redis as a soft cache (orders‑service, portfolio‑service, market‑data‑service) see a modest latency increase, but the observed 2.5 s+ portfolio p99 cannot be explained by cache loss alone.",
+        "supporting": [
+          "OBS-10",
+          "OBS-11",
+          "OBS-12",
+          "OBS-17",
+          "OBS-18",
+          "OBS-19"
+        ],
+        "contradicting": [
+          "OBS-3",
+          "OBS-4",
+          "OBS-5",
+          "OBS-6",
+          "OBS-7",
+          "OBS-8",
+          "OBS-9",
+          "OBS-15"
+        ],
+        "assumptions": [
+          "ASM-8",
+          "ASM-9",
+          "ASM-10"
+        ],
+        "predictions": [
+          "Auth‑service error‑rate and latency should jump precisely at the first WARN (10:12:36 UTC).",
+          "Redis‑cache metrics (CPU, memory, connected_clients, keyspace_hits/misses) should show saturation or a sharp drop just before 10:12 UTC."
+        ],
+        "confidence": 0.42,
+        "version": 1,
+        "round": 2
+      },
+      "confidence": 0.42,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": "reject",
+      "objections": [
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "names log:f58ca7278052 as the trigger, but no change-history query returned it",
+          "alternative": null,
+          "source": "rule"
+        },
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "unsupported_claim",
+          "severity": "blocking",
+          "detail": "Cites log:f58ca7278052 as trigger, but change‑census shows no change record for that log entry.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "ignores_contradiction",
+          "severity": "blocking",
+          "detail": "Same missing explanation for postgres‑orders saturation as HYP‑2.",
+          "alternative": null,
+          "source": "critic"
+        },
+        {
+          "hypothesis_id": "HYP-3",
+          "kind": "alternative_not_excluded",
+          "severity": "blocking",
+          "detail": "HYP‑4 remains a viable alternative covering all symptoms.",
+          "alternative": "HYP-4",
+          "source": "critic"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "statement": "config on postgres-orders at 09:31:44 UTC by marta.silva: Raise work_mem for reporting queries (work_mem: 4MB -> 8MB, applied: reload)",
+      "artifacts": [
+        "chg:2519"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-1",
+      "source": "change-census"
+    },
+    {
+      "statement": "postgres-orders cpu_util rose from 0.36 at 09:30 UTC to 0.95 at 10:40 UTC, well above its baseline mean of 0.34.",
+      "artifacts": [
+        "metric:postgres-orders/cpu_util"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-3",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "postgres-orders query_latency_p99_ms increased from 19 ms at 09:30 UTC to 1,067 ms at 10:40 UTC (baseline ≈ 18 ms).",
+      "artifacts": [
+        "metric:postgres-orders/query_latency_p99_ms"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-4",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "postgres-orders active_connections grew from ~70 to ~175 (baseline ≈ 73).",
+      "artifacts": [
+        "metric:postgres-orders/active_connections"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-5",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "portfolio-service latency_p99_ms climbed from 394 ms at 09:30 UTC to 2,780 ms at 10:40 UTC (baseline ≈ 424 ms).",
+      "artifacts": [
+        "metric:portfolio-service/latency_p99_ms"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-6",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "portfolio-service error_rate rose from 0.0014 to 0.0478 (baseline ≈ 0.0022).",
+      "artifacts": [
+        "metric:portfolio-service/error_rate"
+      ],
+      "service": "portfolio-service",
+      "id": "OBS-7",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "orders-service latency_p99_ms increased from 274 ms to 1,606 ms (baseline ≈ 253 ms).",
+      "artifacts": [
+        "metric:orders-service/latency_p99_ms"
+      ],
+      "service": "orders-service",
+      "id": "OBS-8",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "orders-service error_rate rose from 0.0017 to 0.0248 (baseline ≈ 0.0018).",
+      "artifacts": [
+        "metric:orders-service/error_rate"
+      ],
+      "service": "orders-service",
+      "id": "OBS-9",
+      "source": "r1-observability-1"
+    },
+    {
+      "statement": "Auth‑service emitted 665 WARN logs “session <session> not found in redis; forcing re‑login” between 10:12:36.674Z and 10:39:52.999Z.",
+      "artifacts": [
+        "log:26d7a4550ba6"
+      ],
+      "service": "auth-service",
+      "id": "OBS-10",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "Auth‑service error_rate mean 0.002015 vs baseline 0.001785; latency_p99 mean 262.2 ms vs baseline 258.2 ms over the window.",
+      "artifacts": [
+        "metric:auth-service/error_rate",
+        "metric:auth-service/latency_p99_ms"
+      ],
+      "service": "auth-service",
+      "id": "OBS-11",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "Redis‑cache sentinel reported master down (+sdown) at 10:12:03.988Z, a replica promotion with incomplete resync at 10:12:31.369Z, and master switch at 10:12:37.618Z.",
+      "artifacts": [
+        "log:f58ca7278052",
+        "log:1eb56e1358d5",
+        "log:48f2fea2df36"
+      ],
+      "service": "redis-cache",
+      "id": "OBS-12",
+      "source": "r1-observability-3"
+    },
+    {
+      "statement": "At 09:31:44 UTC the postgres‑orders configuration was changed: work_mem raised from 4 MB to 8 MB (reload).",
+      "artifacts": [
+        "chg:2519"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-13",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "No other config, feature‑flag, secret‑rotation, or infra changes were recorded for postgres‑orders, orders‑service, portfolio‑service, edge‑gateway, or auth‑service between 09:30 UTC and 10:40 UTC.",
+      "artifacts": [
+        "chg:2519"
+      ],
+      "service": null,
+      "id": "OBS-14",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "postgres‑orders is a direct hard SQL dependency (2 s timeout) of both orders‑service and portfolio‑service; edge‑gateway calls those two services (hard HTTP, 3 s). auth‑service has no upstream path to postgres‑orders.",
+      "artifacts": [
+        "dep:orders-service->postgres-orders",
+        "dep:portfolio-service->postgres-orders",
+        "dep:edge-gateway->orders-service",
+        "dep:edge-gateway->portfolio-service"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-15",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "The incident symptoms (portfolio p99 >2.5 s, postgres‑orders CPU ≈100 %, user log‑outs) were reported starting ~10:13 UTC, roughly 42 minutes after the work_mem change.",
+      "artifacts": [
+        "chg:2519"
+      ],
+      "service": null,
+      "id": "OBS-16",
+      "source": "r1-dependency-2"
+    },
+    {
+      "statement": "Redis‑cache sentinel reported master down (+sdown) at 10:12:03.988Z, a replica promotion with incomplete resync at 10:12:31.369Z, and master switch at 10:12:37.618Z.",
+      "artifacts": [
+        "log:f58ca7278052",
+        "log:1eb56e1358d5",
+        "log:48f2fea2df36"
+      ],
+      "service": "redis-cache",
+      "id": "OBS-17",
+      "source": "r1-dependency-4"
+    },
+    {
+      "statement": "Change census query for redis‑cache between 09:30 UTC and 10:15 UTC returned no changes (config, feature‑flag, secret‑rotation, infra, or deploy).",
+      "artifacts": [
+        "chg:2519"
+      ],
+      "service": "redis-cache",
+      "id": "OBS-18",
+      "source": "r1-dependency-4"
+    },
+    {
+      "statement": "Auth‑service, orders‑service, portfolio‑service, and market‑data‑service each have a direct (soft) Redis dependency on redis‑cache (timeout 50‑200 ms).",
+      "artifacts": [
+        "dep:auth-service->redis-cache",
+        "dep:orders-service->redis-cache",
+        "dep:portfolio-service->redis-cache",
+        "dep:market-data-service->redis-cache"
+      ],
+      "service": "redis-cache",
+      "id": "OBS-19",
+      "source": "r1-dependency-4"
+    },
+    {
+      "statement": "postgres‑orders cpu_util stayed near its baseline (≈0.34‑0.41) from 09:30 through 10:09, then rose to 0.571 at 10:12 and 0.972 at 10:15, remaining ≥0.95 through 10:39.",
+      "artifacts": [
+        "metric:postgres-orders/cpu_util"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-20",
+      "source": "r2-observability-5"
+    },
+    {
+      "statement": "postgres‑orders query_latency_p99_ms was stable around 17‑20 ms until 10:09, then spiked to 100 ms at 10:12, 737 ms at 10:15 and stayed in the 800‑1,067 ms range thereafter.",
+      "artifacts": [
+        "metric:postgres-orders/query_latency_p99_ms"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-21",
+      "source": "r2-observability-5"
+    },
+    {
+      "statement": "postgres‑orders active_connections hovered around 70‑85 until 10:09, then jumped to 112 at 10:12, 193 at 10:15 and remained near 180‑190 through 10:39.",
+      "artifacts": [
+        "metric:postgres-orders/active_connections"
+      ],
+      "service": "postgres-orders",
+      "id": "OBS-22",
+      "source": "r2-observability-5"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The Redis master‑down / incomplete‑resync event caused loss of session keys, which auth‑service treats as “session not found” and forces re‑login.",
+      "reason": "Auth‑service WARN logs explicitly mention “session … not found in redis; forcing re‑login” (OBS‑10).",
+      "id": "ASM-2",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "Portfolio‑service’s soft Redis dependency is used only for caching; loss of the cache can increase latency modestly but cannot generate the 7× latency jump seen in OBS‑6/7.",
+      "reason": "Dependency graph shows soft Redis dependency with short timeout (OBS‑19); magnitude of latency spike far exceeds typical cache‑miss impact.",
+      "id": "ASM-3",
+      "source": "r1-reasoning"
+    },
+    {
+      "statement": "No other config, feature‑flag, secret rotation, or infra change on postgres‑orders between 09:30‑10:40 UTC.",
+      "reason": "Change census (OBS‑14) reports none.",
+      "id": "ASM-5",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "Only queries that perform large sorts or hashes can consume the extra work_mem.",
+      "reason": "PostgreSQL documentation: work_mem controls memory for sort/hash operations.",
+      "id": "ASM-6",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "A workload that performs such heavy sorts started around 10:12 UTC (cron job, batch, or untracked feature flag).",
+      "reason": "Metrics show abrupt rise at 10:12 (OBS‑20‑22) with no other recorded change.",
+      "id": "ASM-7",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The Redis master loss was not triggered by a recorded config change.",
+      "reason": "Change census for redis‑cache returned empty (OBS‑18).",
+      "id": "ASM-8",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "Session data lives only in Redis with no fallback store.",
+      "reason": "Auth‑service logs indicate forced re‑login when session missing (OBS‑10).",
+      "id": "ASM-9",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The incomplete replica resync caused loss of a non‑trivial fraction of active sessions.",
+      "reason": "Sentinel logs show promotion with incomplete resync (OBS‑12, OBS‑17).",
+      "id": "ASM-10",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "No deploy or config change on orders‑service or portfolio‑service in the window.",
+      "reason": "Change census (OBS‑14) reports none.",
+      "id": "ASM-11",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The “unknown workload” is not captured in the automated change log (e.g., cron, manual pg_dump, feature‑flag flip).",
+      "reason": "Only recorded change is work_mem; metric inflection suggests new load.",
+      "id": "ASM-12",
+      "source": "r2-reasoning"
+    },
+    {
+      "statement": "The Redis fail‑over did not cause the postgres‑orders saturation (they are independent).",
+      "reason": "Auth‑service has no upstream path to postgres‑orders (OBS‑15); metric timelines diverge.",
+      "id": "ASM-13",
+      "source": "r2-reasoning"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_metrics",
+      "scope": "edge-gateway latency_p99_ms and error_rate (5xx) for 09:30‑10:40 UTC",
+      "reason": "Metrics for edge-gateway were not requested; cannot confirm gateway‑level latency/5xx rise.",
+      "id": "GAP-1",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "WARN/ERROR log patterns for portfolio-service, orders-service, postgres-orders, edge-gateway",
+      "reason": "No log queries executed; missing direct evidence of SQL errors, authentication failures, or gateway rejections.",
+      "id": "GAP-2",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "Per‑minute points for postgres-orders cpu_util, query_latency_p99_ms, active_connections to pinpoint exact onset minute",
+      "reason": "Only summary (first/last) values available; precise onset time remains uncertain.",
+      "id": "GAP-3",
+      "source": "r1-observability-1"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "edge-gateway WARN/ERROR patterns 09:30‑10:40 UTC",
+      "reason": "Not queried; needed to see if gateway surfaced auth failures to clients.",
+      "id": "GAP-4",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "redis-cache CPU, memory, connected_clients, keyspace_hits/misses 09:30‑10:40 UTC",
+      "reason": "Not queried; would show saturation or resource pressure before failover.",
+      "id": "GAP-5",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "auth-service latency_p99_ms and error_rate at 1‑minute resolution 10:10‑10:20 UTC",
+      "reason": "Only summary stats retrieved; per‑minute points needed to align onset with Redis failover.",
+      "id": "GAP-6",
+      "source": "r1-observability-3"
+    },
+    {
+      "tool": "metrics",
+      "scope": "per‑query CPU and memory usage on postgres‑orders (pg_stat_statements, pg_stat_activity) for 09:30‑10:40 UTC",
+      "reason": "Needed to prove whether the work_mem increase caused the CPU saturation.",
+      "id": "GAP-7",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "changes",
+      "scope": "deploy history for orders‑service and portfolio‑service between 09:30‑10:40 UTC",
+      "reason": "A code deploy could have introduced heavier queries that only manifest after the work_mem change.",
+      "id": "GAP-8",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "observability",
+      "scope": "real‑time pg_stat_statements snapshot around 10:13 UTC",
+      "reason": "To identify which queries dominate CPU at the moment of slowdown.",
+      "id": "GAP-9",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "observability",
+      "scope": "auth‑service request‑rate and error‑rate for 09:30‑10:40 UTC",
+      "reason": "To determine if forced log‑outs are a downstream effect of portfolio timeouts.",
+      "id": "GAP-10",
+      "source": "r1-dependency-2"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "redis‑cache configuration, feature‑flag, secret‑rotation, infra, or deploy records",
+      "reason": "The change‑census returned an empty list for redis‑cache, but it is possible that a manual operational action (e.g., a Sentinel‑initiated failover, a rolling restart, or a capacity‑scale event) is not captured in the automated change log.",
+      "id": "GAP-11",
+      "source": "r1-dependency-4"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "per‑minute resolution for cpu_util, query_latency_p99_ms, active_connections",
+      "reason": "API limited series to 30 points, forcing a 3‑minute step; finer granularity would pinpoint the exact minute of onset.",
+      "id": "GAP-12",
+      "source": "r2-observability-5"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "redis‑cache memory, connected_clients, keyspace_hits, keyspace_misses (09:30‑10:40)",
+      "reason": "Metric series not available or not returned by the metrics store.",
+      "id": "GAP-13",
+      "source": "r2-observability-6"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "auth‑service latency_p99_ms and error_rate (10:10‑10:20)",
+      "reason": "Metric series not returned for the requested window.",
+      "id": "GAP-14",
+      "source": "r2-observability-6"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "redis‑cache cpu_util after 10:00 UTC",
+      "reason": "Only data up to 09:59 UTC was returned; later points missing.",
+      "id": "GAP-15",
+      "source": "r2-observability-6"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Add read‑replica capacity or temporarily increase CPU limits for postgres‑orders and enable connection‑pool throttling to bring CPU below saturation.",
+      "rationale": "HYP‑4 predicts the DB is the primary bottleneck; reducing load now restores service latency while root cause is investigated.",
+      "hypothesis_id": "HYP-4",
+      "urgency": "now"
+    },
+    {
+      "kind": "mitigate",
+      "description": "Force a clean Redis failover (promote a fully synced replica) and verify session persistence to stop further forced logouts.",
+      "rationale": "HYP‑2 links the logout wave to the incomplete Redis promotion; a healthy replica eliminates the session‑loss path.",
+      "hypothesis_id": "HYP-2",
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Revert the work_mem change (chg:2519) from 8 MiB back to 4 MiB and monitor postgres‑orders CPU and latency.",
+      "rationale": "HYP‑1 and HYP‑4 both implicate the work_mem increase as an amplifier; reverting tests whether it is necessary for the saturation.",
+      "hypothesis_id": "HYP-1",
+      "urgency": "soon"
+    },
+    {
+      "kind": "fix",
+      "description": "Configure max_connections and statement_timeout on postgres‑orders to prevent connection storms from overwhelming the instance.",
+      "rationale": "HYP‑4 shows a rapid rise in active connections; hard limits stop future storms.",
+      "hypothesis_id": "HYP-4",
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Enable continuous pg_stat_statements collection with alerting on sudden increases in sort/hash memory usage or CPU per query.",
+      "rationale": "Gap GAP‑7 and the HYP‑4 prediction require per‑query visibility to catch similar workload changes early.",
+      "hypothesis_id": "HYP-4",
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add automated validation that Redis sentinel promotions only complete after full resync, and alert on incomplete promotions.",
+      "rationale": "HYP‑2/HYP‑3 identify the incomplete resync as the cause of session loss; preventing it stops future logout waves.",
+      "hypothesis_id": "HYP-2",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Retrieve a pg_stat_statements snapshot for postgres‑orders covering 10:12‑10:15 UTC to identify the heavy sort/hash queries.",
+      "rationale": "Directly tests the HYP‑4 prediction and closes GAP‑7/GAP‑9.",
+      "hypothesis_id": "HYP-4",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Collect redis‑cache metrics (CPU, memory, connected_clients, keyspace_hits/misses) for 09:30‑10:40 UTC.",
+      "rationale": "Needed to confirm or refute pre‑failover saturation predicted by HYP‑2 (GAP‑5, GAP‑13, GAP‑15).",
+      "hypothesis_id": "HYP-2",
+      "urgency": "soon"
+    },
+    {
+      "kind": "investigate",
+      "description": "Query deploy history for orders‑service and portfolio‑service between 09:30‑10:40 UTC.",
+      "rationale": "A code deploy could have introduced the new query pattern mentioned in HYP‑4 (GAP‑8).",
+      "hypothesis_id": "HYP-4",
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Obtain edge‑gateway latency_p99_ms and 5xx error_rate for 09:30‑10:40 UTC.",
+      "rationale": "Closes GAP‑1 and GAP‑4 to see whether gateway‑level errors correlate with auth‑service logouts or DB latency.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Which specific query (or set of queries) caused the sudden CPU and connection surge on postgres‑orders at 10:12 UTC?",
+    "Did the Redis master loss and incomplete resync contribute measurably to the portfolio‑service latency spike, or was the DB saturation the sole driver?",
+    "Was the work_mem increase alone sufficient to cause saturation, or did it require a concurrent workload change (e.g., a scheduled job or feature‑flag rollout)?",
+    "What triggered the new heavy‑query workload at ~10:12 UTC (scheduled reporting job, batch process, traffic spike, deploy, etc.)?",
+    "Were the forced logouts solely due to lost Redis session keys, or did downstream timeouts from the DB latency cause auth‑service to treat sessions as missing?",
+    "Is there any operational action on Redis (manual failover, rolling restart, capacity scale) not captured in the automated change log that could explain the master loss?"
+  ],
+  "termination": "time budget reached",
+  "stats": {
+    "rounds": 2,
+    "model_calls": 36,
+    "tool_calls": 19,
+    "tokens": 175182,
+    "elapsed_s": 975.36
+  }
+}

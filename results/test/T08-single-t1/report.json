@@ -1,0 +1,327 @@
+{
+  "incident_id": "T08",
+  "title": "Deposits and checkout failing overnight",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "At 02:00 UTC the postgres-payments database password for the payments_app user was rotated (chg:2581). The running payments-service pods did not pick up the new credential, so from 02:02 UTC every DB connection attempt failed with “password authentication failed” (1 373 log lines). This caused the connection pool to collapse (in‑use connections dropped from ~6 to 2) and the service error rate to climb from ~0.2 % to >30 %, manifesting as 500 errors on /v1/checkout and /v1/deposits. Health checks stayed green because they only test the HTTP endpoint, not DB reachability. The earlier bank‑rails timeout increase (chg:2578) had no measurable impact.",
+  "root_cause": {
+    "service": "postgres-payments",
+    "category": "certificate_or_credential",
+    "trigger": "chg:2581"
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "postgres-payments",
+          "category": "certificate_or_credential",
+          "trigger": "chg:2581"
+        },
+        "mechanism": "The DB password was rotated but payments-service pods kept the old credential, causing every new connection attempt to fail with authentication errors. The connection pool drained, leading to 500 errors on checkout and deposits.",
+        "supporting": [
+          "OBS-3",
+          "OBS-4",
+          "OBS-6",
+          "OBS-7",
+          "OBS-8"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "After pods reload the new secret (restart or SIGHUP), auth‑failure logs cease.",
+          "error_rate returns to baseline (~0.002) within minutes of reload."
+        ],
+        "confidence": 0.93,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.93,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "payments-service",
+          "category": "config_change",
+          "trigger": "chg:2578"
+        },
+        "mechanism": "Increasing the bank‑rails timeout to 5 s caused longer retries that exhausted the DB pool.",
+        "supporting": [
+          "OBS-2",
+          "OBS-9"
+        ],
+        "contradicting": [
+          "OBS-4",
+          "OBS-6",
+          "OBS-7",
+          "OBS-10"
+        ],
+        "assumptions": [],
+        "predictions": [
+          "If timeout were the cause, error surge would start near 01:38, not 02:02.",
+          "Bank‑rails latency would show a larger increase."
+        ],
+        "confidence": 0.12,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.12,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "payments-service",
+          "category": "resource_exhaustion",
+          "trigger": null
+        },
+        "mechanism": "Combined effect of timeout increase and secret rotation amplified retries, exhausting the DB pool.",
+        "supporting": [
+          "OBS-2",
+          "OBS-3",
+          "OBS-4",
+          "OBS-7"
+        ],
+        "contradicting": [
+          "OBS-9",
+          "OBS-10"
+        ],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "Pool usage would show a gradual rise before collapse if retries were the driver."
+        ],
+        "confidence": 0.08,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.08,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "bank-rails",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "Unannounced bank‑rails maintenance caused intermittent failures that propagated as 500s.",
+        "supporting": [
+          "OBS-11"
+        ],
+        "contradicting": [
+          "OBS-4",
+          "OBS-6",
+          "OBS-9",
+          "OBS-10"
+        ],
+        "assumptions": [],
+        "predictions": [
+          "Bank‑rails latency or error metrics would spike.",
+          "Logs would show bank‑rails specific error codes."
+        ],
+        "confidence": 0.07,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.07,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "Config change at 01:38:20 UTC raised the bank-rails client timeout from 4000 → 5000 ms.",
+      "artifacts": [
+        "chg:2578"
+      ],
+      "service": "payments-service",
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Secret rotation at 02:00:05 UTC rotated the DB password for payments_app on postgres-payments (v31 → v32).",
+      "artifacts": [
+        "chg:2581"
+      ],
+      "service": "postgres-payments",
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "Starting 02:02:05 UTC the logs show 1 373 occurrences of “could not open connection to postgres-payments: FATAL: password authentication failed for user ‘payments_app’”.",
+      "artifacts": [
+        "log:07bf0979f12c"
+      ],
+      "service": "payments-service",
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "payments-service error_rate jumps from baseline 0.002 to window‑average 0.206, ending at 0.33.",
+      "artifacts": [
+        "metric:payments-service/error_rate"
+      ],
+      "service": "payments-service",
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "db_pool_in_use falls from baseline ≈6 to 2.0 at the end of the window.",
+      "artifacts": [
+        "metric:payments-service/db_pool_in_use"
+      ],
+      "service": "payments-service",
+      "id": "OBS-7",
+      "source": "investigate"
+    },
+    {
+      "statement": "Request rate (rps) stays roughly constant at ≈78 req/s.",
+      "artifacts": [
+        "metric:payments-service/rps"
+      ],
+      "service": "payments-service",
+      "id": "OBS-8",
+      "source": "investigate"
+    },
+    {
+      "statement": "bank_rails_latency_p99 rises modestly from baseline 406 ms to last 462 ms.",
+      "artifacts": [
+        "metric:payments-service/bank_rails_latency_p99_ms"
+      ],
+      "service": "payments-service",
+      "id": "OBS-9",
+      "source": "investigate"
+    },
+    {
+      "statement": "Overall latency_p99 is unchanged (baseline 483 ms → last 494 ms).",
+      "artifacts": [
+        "metric:payments-service/latency_p99_ms"
+      ],
+      "service": "payments-service",
+      "id": "OBS-10",
+      "source": "investigate"
+    },
+    {
+      "statement": "Low‑volume “card authorization declined” and “bank‑rails returned 409 (duplicate)” warnings exist throughout but do not correlate with the sharp error‑rate rise.",
+      "artifacts": [
+        "log:4d321eb6ff38",
+        "log:056d74b236f2"
+      ],
+      "service": "payments-service",
+      "id": "OBS-11",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "The secret rotation (chg:2581) was not automatically re‑loaded by the running payments-service pods, so they continued to use the old password (v31).",
+      "reason": "No evidence of a reload event in logs; pods remained up and healthy.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "Health‑check endpoint only validates HTTP liveness, not DB connectivity, which is why pods appear “healthy”.",
+      "reason": "Observed green health checks while DB auth failures persisted.",
+      "id": "ASM-2",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_logs",
+      "scope": "payments-service secret‑reload or SIGHUP handling logs",
+      "reason": "Logs do not contain any indication that the service attempted to reload the rotated secret.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "per‑minute error_rate series for payments-service",
+      "reason": "The metrics endpoint returned only a summary; minute‑level granularity would pinpoint the exact onset.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "bank‑rails provider logs",
+      "reason": "External provider logs are not accessible; cannot fully rule out a simultaneous bank‑rails issue.",
+      "id": "GAP-3",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "fix",
+      "description": "Rollback or re‑apply the DB secret to all payments-service pods (restart pods or trigger a secret reload).",
+      "rationale": "Restores valid credentials; logs show immediate auth failures after rotation.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add a DB‑connectivity probe to the health‑check (or a separate readiness probe).",
+      "rationale": "Prevents “green health, dead DB” situation in future.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Audit secret‑rotation automation to ensure consuming services reload secrets automatically (e.g., Vault Agent sidecar or SIGHUP).",
+      "rationale": "Removes the manual‑restart gap that caused the outage.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "investigate",
+      "description": "Validate the bank‑rails timeout change in staging and add monitoring for its latency/error impact.",
+      "rationale": "The change itself was benign, but verification avoids future surprises.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Enable per‑minute error‑rate alerting on payments-service (threshold >1 %).",
+      "rationale": "Earlier detection would have cut the impact window.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Does payments-service support dynamic secret reload, or is a pod restart required?",
+    "Were any in‑flight transactions lost during the 2‑minute window before the first auth‑failure log line?",
+    "Could the bank‑rails timeout increase have contributed to any secondary latency spikes once DB connectivity is restored?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 7,
+    "tool_calls": 5,
+    "tokens": 41422,
+    "elapsed_s": 285.18
+  }
+}

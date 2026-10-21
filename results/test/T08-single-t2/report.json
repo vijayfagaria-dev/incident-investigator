@@ -1,0 +1,335 @@
+{
+  "incident_id": "T08",
+  "title": "Deposits and checkout failing overnight",
+  "outcome": "conclusive",
+  "outcome_reasons": [],
+  "summary": "At 02:00:05 UTC the Vault‑managed password for the payments_app database user on postgres-payments was rotated (chg:2581). The running payments-service pods continued using the old password, so every new DB connection failed with “password authentication failed”. Because the DB pool is a hard dependency, checkout (POST /v1/checkout) and deposit (POST /v1/deposits) calls began returning 500 errors; error_rate rose from a baseline of 0.002 to 0.33 and the DB connection pool collapsed from ~6 to 2 connections. Health checks stayed green because they do not exercise a DB connection. The earlier config change that raised the bank‑rails timeout (chg:2578) is unrelated – bank‑rails shows only benign 409 warnings and stable latency.",
+  "root_cause": {
+    "service": "postgres-payments",
+    "category": "certificate_or_credential",
+    "trigger": "chg:2581"
+  },
+  "hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis": {
+        "id": "HYP-1",
+        "root_cause": {
+          "service": "postgres-payments",
+          "category": "certificate_or_credential",
+          "trigger": "chg:2581"
+        },
+        "mechanism": "Secret rotation changed the DB password; payments-service pods kept the old password, causing authentication failures on every new connection. The hard DB dependency makes checkout/deposit calls fail with 500, draining the pool and raising error_rate.",
+        "supporting": [
+          "OBS-3",
+          "OBS-4",
+          "OBS-7",
+          "OBS-1"
+        ],
+        "contradicting": [],
+        "assumptions": [
+          "ASM-1",
+          "ASM-2"
+        ],
+        "predictions": [
+          "Rolling restart of payments-service pods will immediately stop auth failures and restore error_rate to baseline."
+        ],
+        "confidence": 0.93,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.93,
+      "calibration": [],
+      "confidence_band": "high",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 2,
+      "hypothesis": {
+        "id": "HYP-2",
+        "root_cause": {
+          "service": "payments-service",
+          "category": "config_change",
+          "trigger": "chg:2578"
+        },
+        "mechanism": "Raising the bank-rails client timeout caused downstream time‑outs that manifest as 500s on checkout/deposit.",
+        "supporting": [
+          "OBS-2",
+          "OBS-1"
+        ],
+        "contradicting": [
+          "OBS-6",
+          "OBS-7"
+        ],
+        "assumptions": [
+          "ASM-3"
+        ],
+        "predictions": [
+          "Bank‑rails latency would increase sharply after 01:38; it does not."
+        ],
+        "confidence": 0.12,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.12,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 3,
+      "hypothesis": {
+        "id": "HYP-3",
+        "root_cause": {
+          "service": "bank-rails",
+          "category": "dependency_degradation",
+          "trigger": null
+        },
+        "mechanism": "Bank‑rails maintenance/outage (similar to Feb) causes checkout/deposit failures.",
+        "supporting": [],
+        "contradicting": [
+          "OBS-6",
+          "OBS-7"
+        ],
+        "assumptions": [
+          "ASM-4"
+        ],
+        "predictions": [
+          "Bank‑rails error rate or latency would spike; they do not."
+        ],
+        "confidence": 0.04,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.04,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    },
+    {
+      "rank": 4,
+      "hypothesis": {
+        "id": "HYP-4",
+        "root_cause": {
+          "service": "payments-service",
+          "category": "code_regression",
+          "trigger": null
+        },
+        "mechanism": "A latent bug in payments-service surfaces under load, causing 500s.",
+        "supporting": [
+          "OBS-7"
+        ],
+        "contradicting": [
+          "OBS-9",
+          "OBS-4"
+        ],
+        "assumptions": [
+          "ASM-5"
+        ],
+        "predictions": [
+          "New error signatures would appear in logs; only DB auth errors appear."
+        ],
+        "confidence": 0.04,
+        "version": 1,
+        "round": 1
+      },
+      "confidence": 0.04,
+      "calibration": [],
+      "confidence_band": "low",
+      "verdict": null,
+      "objections": []
+    }
+  ],
+  "facts": [
+    {
+      "statement": "payments-service depends on bank-rails (hard, 4 s timeout), kafka (soft), and postgres-payments (hard, 2 s timeout).",
+      "artifacts": [
+        "dep:payments-service->bank-rails",
+        "dep:payments-service->postgres-payments"
+      ],
+      "service": null,
+      "id": "OBS-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "At 01:38:20 a config change raised the bank-rails client timeout from 4000 ms to 5000 ms.",
+      "artifacts": [
+        "chg:2578"
+      ],
+      "service": null,
+      "id": "OBS-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "At 02:00:05 a secret rotation replaced the DB password for payments_app on postgres-payments (v31 → v32).",
+      "artifacts": [
+        "chg:2581"
+      ],
+      "service": null,
+      "id": "OBS-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "From 02:02:05 onward 788 ERROR log lines appear: “could not open connection to postgres-payments: FATAL: password authentication failed for user “payments_app””.",
+      "artifacts": [
+        "log:07bf0979f12c"
+      ],
+      "service": null,
+      "id": "OBS-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "Bank-rails logs only WARN lines (7 × 409 idempotency‑key duplicates); no error surge.",
+      "artifacts": [
+        "log:056d74b236f2"
+      ],
+      "service": null,
+      "id": "OBS-6",
+      "source": "investigate"
+    },
+    {
+      "statement": "Metrics 01:30‑02:35: error_rate jumps from baseline 0.002 to 0.327 (last minute), latency_p99 rises from 483 ms baseline to 564 ms, db_pool_in_use falls from ~6 baseline to 2. CPU, memory, RPS flat.",
+      "artifacts": [
+        "metric:payments-service/error_rate",
+        "metric:payments-service/latency_p99_ms",
+        "metric:payments-service/db_pool_in_use"
+      ],
+      "service": null,
+      "id": "OBS-7",
+      "source": "investigate"
+    },
+    {
+      "statement": "No deploy of payments-service or any other service in the 00:00‑02:35 window.",
+      "artifacts": [
+        "chg:2578",
+        "chg:2581"
+      ],
+      "service": null,
+      "id": "OBS-9",
+      "source": "investigate"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "payments-service reads the DB password only at start‑up; the secret rotation does not trigger a reload.",
+      "reason": "Observed auth failures start after rotation and persist until pods restart; no evidence of auto‑reload.",
+      "id": "ASM-1",
+      "source": "investigate"
+    },
+    {
+      "statement": "The health‑check endpoint does not open a DB connection.",
+      "reason": "Health checks stay green while DB auth failures occur (F8).",
+      "id": "ASM-2",
+      "source": "investigate"
+    },
+    {
+      "statement": "Increasing the bank-rails timeout by 1 s cannot instantly produce a 30 %+ error rate on checkout/deposit.",
+      "reason": "Bank‑rails latency remains at baseline (F7) and only WARN logs appear (F6).",
+      "id": "ASM-3",
+      "source": "investigate"
+    },
+    {
+      "statement": "No hidden bank-rails outage occurred; the only observable bank-rails signal is the 409 warnings.",
+      "reason": "Metrics and logs for bank-rails show no error increase (F6, F7).",
+      "id": "ASM-4",
+      "source": "investigate"
+    },
+    {
+      "statement": "No latent code regression was exercised for the first time at 02:00 UTC.",
+      "reason": "No deploy in window (F9) and the only new error type is DB auth failure (F4).",
+      "id": "ASM-5",
+      "source": "investigate"
+    }
+  ],
+  "gaps": [
+    {
+      "tool": "query_logs",
+      "scope": "postgres-payments",
+      "reason": "DB logs would confirm authentication failures on the server side and verify rotation success.",
+      "id": "GAP-1",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_metrics",
+      "scope": "postgres-payments",
+      "reason": "DB connection metrics would show the drop in successful auths.",
+      "id": "GAP-2",
+      "source": "investigate"
+    },
+    {
+      "tool": "get_change_history",
+      "scope": "payments-service credential reload mechanism",
+      "reason": "Need to know if the service auto‑reloads Vault secrets or requires restart.",
+      "id": "GAP-3",
+      "source": "investigate"
+    },
+    {
+      "tool": "query_logs",
+      "scope": "payments-service health‑check endpoint",
+      "reason": "Confirm health‑check does not hit the DB (assumption A2).",
+      "id": "GAP-4",
+      "source": "investigate"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "mitigate",
+      "description": "Roll restart all payments-service pods (or trigger a config reload if supported).",
+      "rationale": "Forces pods to fetch the new DB password, stopping auth failures immediately.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "fix",
+      "description": "Verify postgres-payments accepted the new password (check DB auth logs).",
+      "rationale": "Confirms rotation succeeded on the server side.",
+      "hypothesis_id": null,
+      "urgency": "now"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add a DB‑connection check to payments-service readiness probe.",
+      "rationale": "Future credential rotations will be detected automatically; health checks will reflect true state.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Update secret‑rotation run‑book to notify payments team and/or automate rolling restart of dependent services after DB password change.",
+      "rationale": "Removes manual gap that caused outage.",
+      "hypothesis_id": null,
+      "urgency": "soon"
+    },
+    {
+      "kind": "prevent",
+      "description": "Implement dynamic credential reload (Vault Agent sidecar or periodic config refresh) in payments-service.",
+      "rationale": "Eliminates need for restarts on future rotations.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    },
+    {
+      "kind": "prevent",
+      "description": "Add alerting on sharp drop of db_pool_in_use or spike in error_rate for payments-service.",
+      "rationale": "Early detection of similar credential‑mismatch incidents.",
+      "hypothesis_id": null,
+      "urgency": "later"
+    }
+  ],
+  "open_questions": [
+    "Does payments-service have any automatic credential‑refresh capability?",
+    "What does the current health‑check endpoint actually test?",
+    "Were there any concurrent DB configuration changes (e.g., pg_hba.conf reload) not captured in change history?",
+    "Can we add a metric/alert for the “password authentication failed” log pattern to catch credential mismatches instantly?"
+  ],
+  "termination": "the agent finished its investigation",
+  "stats": {
+    "rounds": 1,
+    "model_calls": 6,
+    "tool_calls": 4,
+    "tokens": 34737,
+    "elapsed_s": 145.29
+  }
+}
