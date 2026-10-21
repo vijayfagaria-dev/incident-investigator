@@ -1,6 +1,6 @@
 [project]
 name = "incident-investigator"
-version = "0.1.0"
+version = "1.0.0"
 description = "Multi-agent investigation of production incidents with evidence-backed root-cause reports."
 readme = "README.md"
 authors = [
